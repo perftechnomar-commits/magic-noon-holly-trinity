@@ -5,15 +5,18 @@ from requests.auth import HTTPBasicAuth
 import time
 
 # Configure the Streamlit page
-st.set_page_config(page_title="Magin Noon alla Mantalos", layout="wide")
+st.set_page_config(page_title="Magic Noon alla Mantalos", layout="wide")
 
 # Display title and instructions
-st.title("Magin Noon alla Mantalos")
-st.markdown("Enter your credentials and choose a start date to fetch all-vessel data.")
+st.title("Magic Noon alla Mantalos")
+st.markdown("Choose a start date to fetch all-vessel data. Credentials are read from Streamlit secrets.")
 
-# Prompt for credentials and start date
-username = st.text_input("Username")
-password = st.text_input("Password", type="password")
+# Read credentials from secrets rather than prompting the user.  If these
+# entries are not set in `.streamlit/secrets.toml`, the app will show an
+# error when attempting to fetch data.  A date input is still provided
+# to allow the user to select the reporting window.
+username = st.secrets.get("MARORKA_USERNAME")
+password = st.secrets.get("MARORKA_PASSWORD")
 start_date_input = st.date_input("Start Date", value=pd.to_datetime("2026-01-01"))
 
 # Convert date input to string for OData filter
@@ -144,8 +147,12 @@ def fetch_all_data(base_url: str, parameters: dict) -> tuple[pd.DataFrame, int]:
     return pd.DataFrame(rows), total_bytes
 
 if st.button("Load Data"):
+    # Ensure credentials are available; if not, instruct the user to configure secrets
     if not username or not password:
-        st.warning("Please enter both username and password to fetch data.")
+        st.error(
+            "API credentials are not configured. Please set 'MARORKA_USERNAME' "
+            "and 'MARORKA_PASSWORD' in your `.streamlit/secrets.toml` file."
+        )
     else:
         start_time = time.time()
         df, bytes_downloaded = fetch_all_data(BASE_URL, params)
