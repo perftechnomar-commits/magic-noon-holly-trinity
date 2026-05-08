@@ -287,6 +287,22 @@ def inject_app_css() -> None:
     st.markdown(
         """
         <style>
+        :root {
+            --page-bg: #141820;
+            --panel-bg: #1b2029;
+            --sidebar-bg: #20242e;
+            --border-soft: rgba(183, 197, 214, 0.16);
+            --text-soft: rgba(237, 242, 247, 0.68);
+            --accent: #4fb286;
+            --accent-strong: #3d9b8f;
+            --accent-muted: rgba(79, 178, 134, 0.16);
+        }
+
+        .stApp {
+            background:
+                linear-gradient(180deg, rgba(29, 35, 45, 0.96) 0%, var(--page-bg) 36%, #11151b 100%);
+        }
+
         .block-container {
             max-width: 1480px;
             padding-top: 1.5rem;
@@ -294,7 +310,13 @@ def inject_app_css() -> None:
         }
 
         [data-testid="stSidebar"] {
-            border-right: 1px solid rgba(128, 128, 128, 0.22);
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border-soft);
+        }
+
+        [data-testid="stHeader"] {
+            background: rgba(20, 24, 32, 0.86);
+            backdrop-filter: blur(8px);
         }
 
         [data-testid="stSidebar"] h2,
@@ -313,13 +335,13 @@ def inject_app_css() -> None:
         }
 
         .app-header {
-            border-bottom: 1px solid rgba(128, 128, 128, 0.24);
+            border-bottom: 1px solid var(--border-soft);
             margin-bottom: 1rem;
-            padding-bottom: 1rem;
+            padding-bottom: 0.9rem;
         }
 
         .app-eyebrow {
-            color: #66b3a6;
+            color: var(--accent);
             font-size: 0.82rem;
             font-weight: 700;
             margin-bottom: 0.2rem;
@@ -332,12 +354,12 @@ def inject_app_css() -> None:
         }
 
         .kpi-card {
-            border: 1px solid rgba(128, 128, 128, 0.22);
+            border: 1px solid var(--border-soft);
             border-left: 5px solid var(--accent);
             border-radius: 8px;
             padding: 0.9rem 1rem;
             min-height: 116px;
-            background: rgba(255, 255, 255, 0.035);
+            background: var(--panel-bg);
         }
 
         .kpi-label {
@@ -382,11 +404,11 @@ def inject_app_css() -> None:
         }
 
         [data-testid="stMetric"] {
-            border: 1px solid rgba(128, 128, 128, 0.22);
-            border-left: 4px solid #66b3a6;
+            border: 1px solid var(--border-soft);
+            border-left: 4px solid var(--accent);
             border-radius: 8px;
             padding: 0.85rem 0.95rem;
-            background: rgba(255, 255, 255, 0.035);
+            background: var(--panel-bg);
         }
 
         [data-testid="stMetricLabel"] p {
@@ -409,8 +431,16 @@ def inject_app_css() -> None:
             font-weight: 650;
         }
 
+        [data-testid="stTabs"] button[aria-selected="true"] p {
+            color: var(--accent);
+        }
+
+        [data-testid="stTabs"] button[aria-selected="true"] {
+            border-bottom-color: var(--accent);
+        }
+
         .stDataFrame {
-            border: 1px solid rgba(128, 128, 128, 0.2);
+            border: 1px solid var(--border-soft);
             border-radius: 8px;
             overflow: hidden;
         }
@@ -418,6 +448,39 @@ def inject_app_css() -> None:
         div.stButton > button {
             border-radius: 6px;
             font-weight: 650;
+        }
+
+        div.stButton > button[kind="primary"] {
+            background: var(--accent-strong);
+            border-color: var(--accent-strong);
+            color: #ffffff;
+        }
+
+        div.stButton > button[kind="primary"]:hover {
+            background: #34887f;
+            border-color: #34887f;
+            color: #ffffff;
+        }
+
+        div.stButton > button:not([kind="primary"]) {
+            border-color: var(--border-soft);
+        }
+
+        [data-baseweb="tag"] {
+            background-color: var(--accent-muted);
+            border: 1px solid rgba(79, 178, 134, 0.34);
+            color: #dff6ee;
+        }
+
+        [data-baseweb="tag"] span {
+            color: #dff6ee;
+        }
+
+        input:focus,
+        textarea:focus,
+        [data-baseweb="select"] > div:focus-within {
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 0 1px rgba(79, 178, 134, 0.28) !important;
         }
 
         .section-note {
@@ -465,10 +528,6 @@ def render_app_header() -> None:
         <div class="app-header">
             <div class="app-eyebrow">Magic Noon alla Mantalos</div>
             <h1>Fleet Performance Dashboard</h1>
-            <div class="app-subtitle">
-                Excel-equivalent calculations from Marorka OData, optimized for fleet-level filtering,
-                vessel review, and operational KPI monitoring.
-            </div>
         </div>
         """,
         unsafe_allow_html=True,
