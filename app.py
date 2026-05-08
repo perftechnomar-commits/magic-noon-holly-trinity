@@ -964,4 +964,8 @@ with report_tab:
     else:
         render_report_presentation(filtered_pivot)
 
-with 
+with tables_tab:
+    if filtered_pivot.empty:
+        st.warning("No reports match the current report filters.")
+    else:
+        render_data_tables(filtered_pivot, filtered_raw, latest_df)
