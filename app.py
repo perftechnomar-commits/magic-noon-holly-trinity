@@ -23,11 +23,24 @@ PAGE_SAFETY_LIMIT = 2000
 SAMPLE_ROW_LIMIT = 100
 METRIC_QUERY_CHUNK_SIZE = 8
 
+DEFAULT_VESSEL_OPTIONS = [
+    "Athena Y",
+    "Colombia Express",
+    "Costa Rica Express",
+    "Jamaica Express",
+    "Mexico Express",
+    "Nicaragua Express",
+    "Panama Express",
+    "Sambhar",
+    "Zim Norfolk",
+    "Zim Xiamen",
+]
+
 QUERY_MODES = [
+    "Dashboard metric pull",
     "Excel-style full pull",
     "Connection test",
     "Date sample",
-    "Selected metric pull",
 ]
 
 DATE_LITERAL_FORMATS = {
@@ -512,7 +525,7 @@ def render_app_header() -> None:
         """
         <div class="app-header">
             <div class="app-eyebrow">Magic Noon alla Mantalos</div>
-            <h1>Magic Noon Mantalos</h1>
+            <h1>Fleet Performance Dashboard</h1>
         </div>
         """,
         unsafe_allow_html=True,
@@ -531,6 +544,34 @@ def get_int_secret(name: str, default: int) -> int:
         return int(get_secret(name, str(default)))
     except ValueError:
         return default
+
+
+def split_text_values(value: str) -> list[str]:
+    separators = [",", ";", "\n"]
+    normalized = value
+    for separator in separators:
+        normalized = normalized.replace(separator, "\n")
+    return [item.strip() for item in normalized.splitlines() if item.strip()]
+
+
+def unique_preserve_order(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        key = value.casefold()
+        if key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
+def configured_vessel_options() -> list[str]:
+    configured_values = split_text_values(get_secret("MARORKA_VESSELS"))
+    secret_ship = get_secret("MARORKA_SHIP_NAME", DEFAULT_API_SHIP_FILTER).strip()
+    options = configured_values or DEFAULT_VESSEL_OPTIONS
+    if secret_ship:
+        options = [secret_ship] + options
+    return sorted(unique_preserve_order(options), key=str.casefold)
 
 
 def get_default_start_date() -> date:
@@ -686,6 +727,9 @@ def build_parameter_sets(
             )
         ]
 
+    # Default dashboard path: query only the value descriptions used by the
+    # Streamlit calculations and interactive filters. This keeps fleet-wide
+    # multi-month windows inside Streamlit Cloud's memory/time limits.
     return [
         build_query_params(
             start_date_value,
@@ -1589,10 +1633,25 @@ def numeric_filter_columns(df: pd.DataFrame) -> list[str]:
     for column in df.columns:
         if column in excluded_columns:
             continue
+        if pd.api.types.is_datetime64_any_dtype(df[column]):
+            continue
         numeric_values = pd.to_numeric(df[column], errors="coerce")
         if numeric_values.notna().any():
             options.append(column)
     return options
+
+
+def clamp_date_range_state(key: str, minimum_date: date, maximum_date: date) -> None:
+    value = st.session_state.get(key)
+    if not isinstance(value, tuple) or len(value) != 2:
+        return
+
+    start_value, end_value = value
+    start_value = max(minimum_date, min(start_value, maximum_date))
+    end_value = max(minimum_date, min(end_value, maximum_date))
+    if start_value > end_value:
+        start_value, end_value = end_value, start_value
+    st.session_state[key] = (start_value, end_value)
 
 
 def slider_step(minimum_value: float, maximum_value: float) -> float:
@@ -1738,8 +1797,49 @@ def render_dashboard_table(filtered_df: pd.DataFrame, visible_columns: list[str]
         available_columns = filtered_df.columns.tolist()
 
     table_df = filtered_df.sort_values("EndDateTimeGMT", ascending=False)[available_columns]
-    styled_table = style_report_table(table_df)
-    st.dataframe(styled_table, use_container_width=True, hide_index=True)
+    display_report_table(table_df)
+
+
+def display_report_table(table_df: pd.DataFrame) -> None:
+    st.dataframe(
+        format_report_table_for_display(table_df),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def format_report_table_for_display(table_df: pd.DataFrame) -> pd.DataFrame:
+    display_df = table_df.copy()
+    percentage_columns = [
+        "Calculated Slip",
+        "ME Load [%MCR]",
+        "Load per Generator [% MCR]",
+        "Difference Percentage",
+        "Difference Percentage2",
+        "Difference Percentage3",
+    ]
+
+    for column in display_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(display_df[column]):
+            display_df[column] = pd.to_datetime(display_df[column], errors="coerce").dt.strftime(
+                "%Y-%m-%d %H:%M"
+            )
+
+    for column in percentage_columns:
+        if column in display_df.columns:
+            values = pd.to_numeric(display_df[column], errors="coerce")
+            display_df[column] = values.map(lambda value: "-" if pd.isna(value) else f"{value:.1%}")
+
+    numeric_columns = [
+        column
+        for column in display_df.select_dtypes(include="number").columns
+        if column not in percentage_columns
+    ]
+    for column in numeric_columns:
+        values = pd.to_numeric(display_df[column], errors="coerce")
+        display_df[column] = values.map(lambda value: "-" if pd.isna(value) else f"{value:,.3f}")
+
+    return display_df.fillna("-")
 
 
 def cell_tone_style(value: object, tone_function) -> str:
@@ -1813,11 +1913,7 @@ def render_operational_dashboard(
         unsafe_allow_html=True,
     )
     latest_columns = [column for column in DEFAULT_TABLE_COLUMNS if column in filtered_df.columns]
-    st.dataframe(
-        style_report_table(latest_by_vessel(filtered_df)[latest_columns]),
-        use_container_width=True,
-        hide_index=True,
-    )
+    display_report_table(latest_by_vessel(filtered_df)[latest_columns])
 
     st.markdown("### Filtered Report Table")
     st.markdown(
@@ -1839,7 +1935,6 @@ with st.sidebar:
 
     api_base_url = get_secret("MARORKA_BASE_URL", BASE_URL).strip() or BASE_URL
     query_mode = "Excel-style full pull"
-    api_ship_name = get_secret("MARORKA_SHIP_NAME", DEFAULT_API_SHIP_FILTER).strip()
     date_format_label = "Date only"
     selected_values = DEFAULT_VALUES
     page_safety_limit = get_int_secret("MARORKA_PAGE_SAFETY_LIMIT", PAGE_SAFETY_LIMIT)
@@ -1848,15 +1943,54 @@ with st.sidebar:
     start_date_input = st.date_input("Start date", value=get_default_start_date())
     end_date_input = st.date_input("End date", value=date.today())
 
-    refresh_fetch = st.button("Refresh API data", type="primary", use_container_width=True)
+    vessel_options_before_load = configured_vessel_options()
+    preferred_vessel = get_secret("MARORKA_SHIP_NAME", DEFAULT_API_SHIP_FILTER).strip()
+    vessel_index = (
+        vessel_options_before_load.index(preferred_vessel) + 1
+        if preferred_vessel in vessel_options_before_load
+        else 0
+    )
+    selected_api_vessel = st.selectbox(
+        "Vessel to load",
+        options=[""] + vessel_options_before_load,
+        index=vessel_index,
+    )
+    custom_api_vessel = st.text_input(
+        "Other vessel name",
+        value="",
+        placeholder="Type exact vessel name",
+    )
+    api_ship_name = custom_api_vessel.strip() or selected_api_vessel.strip()
+
+    load_fetch = st.button("Load dashboard data", type="primary", use_container_width=True)
+    refresh_fetch = st.button("Reload selected data", use_container_width=True)
+
+if end_date_input < start_date_input:
+    st.warning("End date must be on or after start date.")
+    st.stop()
+
+active_request = {
+    "start_date": start_date_input.isoformat(),
+    "end_date": end_date_input.isoformat(),
+    "ship_name": api_ship_name,
+}
+
+if load_fetch or refresh_fetch:
+    if not api_ship_name:
+        st.warning("Select or type a vessel before loading dashboard data.")
+        st.stop()
+    st.session_state.active_api_request = active_request
 
 if refresh_fetch:
     fetch_all_data.clear()
     transform_report_data.clear()
-    st.rerun()
 
-if end_date_input < start_date_input:
-    st.warning("End date must be on or after start date.")
+if not api_ship_name:
+    st.info("Select a date range and vessel, then click Load dashboard data.")
+    st.stop()
+
+if st.session_state.get("active_api_request") != active_request:
+    st.info("Click Load dashboard data to pull Marorka reports for the selected date range and vessel.")
     st.stop()
 
 parameter_sets = build_parameter_sets(
@@ -1898,7 +2032,7 @@ except requests.HTTPError as exc:
             st.code(failed_url, language="text")
     st.info(
         "For HTTP 404, first try API request type = Connection test. "
-        "If that works, try Date sample. If only Selected metric pull fails, "
+        "If that works, try Date sample. If only the dashboard pull fails, "
         "the metric filter is likely too large or one ValueDescription is invalid."
     )
     st.stop()
@@ -1981,6 +2115,7 @@ with st.sidebar:
 
     with st.expander("Boiler KPI Filters"):
         st.caption("These filters affect only the Sum of Boiler Sum KPI.")
+        clamp_date_range_state("filter_boiler_date_range", loaded_start_date, loaded_end_date)
         boiler_date_range = st.date_input(
             "Boiler date range",
             value=(loaded_start_date, loaded_end_date),
