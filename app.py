@@ -527,7 +527,7 @@ def render_app_header() -> None:
         """
         <div class="app-header">
             <div class="app-eyebrow">Magic Noon alla Mantalos</div>
-            <h1>Fleet Performance Dashboard</h1>
+            <h1>"Magic Noon alla Mantalos"</h1>
         </div>
         """,
         unsafe_allow_html=True,
