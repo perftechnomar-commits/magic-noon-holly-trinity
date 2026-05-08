@@ -9,9 +9,7 @@ st.set_page_config(page_title="Magin Noon alla Mantalos", layout="wide")
 
 # Display title and instructions
 st.title("Magin Noon alla Mantalos")
-st.markdown(
-    "Enter your OData credentials and choose a start date to fetch all-vessel data."
-)
+st.markdown("Enter your credentials and choose a start date to fetch all-vessel data.")
 
 # Prompt for credentials and start date
 username = st.text_input("Username")
