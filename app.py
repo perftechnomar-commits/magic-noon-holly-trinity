@@ -4,31 +4,19 @@ import requests
 from requests.auth import HTTPBasicAuth
 import time
 
-"""
-A Streamlit app to test loading Marorka ReportData for all vessels using a filtered
-and selected list of columns. This app prompts the user for Marorka credentials,
-a start date, and then pulls data from the OData API. It paginates through
-results, measures download size and time, and displays both the raw and a
-pivoted form of the dataset. Users can also download the pivoted data as
-a CSV file.
-
-This is intended as a diagnostic tool to assess API load performance and
-verify that filtering and selection work as expected across all vessels.
-"""
-
 # Configure the Streamlit page
-st.set_page_config(page_title="Marorka Global Performance Test", layout="wide")
+st.set_page_config(page_title="Magin Noon alla Mantalos", layout="wide")
 
 # Display title and instructions
-st.title("Marorka ReportData Global Performance Test")
+st.title("Magin Noon alla Mantalos")
 st.markdown(
-    "Enter your Marorka OData credentials and choose a start date to fetch all-vessel data."
+    "Enter your OData credentials and choose a start date to fetch all-vessel data."
 )
 
 # Prompt for credentials and start date
 username = st.text_input("Marorka Username")
 password = st.text_input("Marorka Password", type="password")
-start_date_input = st.date_input("Start Date", value=pd.to_datetime("2025-11-10"))
+start_date_input = st.date_input("Start Date", value=pd.to_datetime("2026-01-01"))
 
 # Convert date input to string for OData filter
 start_date_str = start_date_input.strftime("%Y-%m-%d")
