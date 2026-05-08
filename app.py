@@ -19,6 +19,19 @@ BASE_URL = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 DEFAULT_DAYS_BACK = 30
 DEFAULT_MAX_PAGES = 5
 ABSOLUTE_MAX_PAGES = 500
+SAMPLE_ROW_LIMIT = 100
+METRIC_QUERY_CHUNK_SIZE = 8
+
+QUERY_MODES = [
+    "Connection test",
+    "Date sample",
+    "Selected metric pull",
+]
+
+DATE_LITERAL_FORMATS = {
+    "Date only": "%Y-%m-%d",
+    "Date and time": "%Y-%m-%dT00:00:00",
+}
 
 REPORT_TYPES_TO_EXCLUDE = [
     "Intake Report",
@@ -233,21 +246,89 @@ def build_report_type_filter(report_types: list[str]) -> str:
     )
 
 
-def build_query_params(start_date_value: date, values: list[str]) -> dict[str, str]:
-    start_datetime = start_date_value.strftime("%Y-%m-%dT00:00:00")
-    value_filter = build_value_filter(values)
-    report_type_filter = build_report_type_filter(REPORT_TYPES_TO_EXCLUDE)
+def chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index : index + size] for index in range(0, len(values), size)]
 
-    return {
+
+def build_query_params(
+    start_date_value: date,
+    values: list[str] | None,
+    *,
+    include_date_filter: bool,
+    include_value_filter: bool,
+    date_literal_format: str,
+    top_limit: int | None = None,
+) -> dict[str, str]:
+    start_datetime = start_date_value.strftime(date_literal_format)
+    report_type_filter = build_report_type_filter(REPORT_TYPES_TO_EXCLUDE)
+    filters = ["ValueDescription ne null"]
+
+    if include_date_filter:
+        filters.insert(0, f"StartDateTimeGMT ge DateTime'{start_datetime}'")
+
+    if report_type_filter:
+        filters.append(report_type_filter.removeprefix("and "))
+
+    if include_value_filter and values:
+        filters.append(f"({build_value_filter(values)})")
+
+    params = {
         "$format": "json",
         "$select": ",".join(INDEX_COLUMNS + ["ValueDescription", "ReportedValue"]),
-        "$filter": (
-            f"StartDateTimeGMT ge DateTime'{start_datetime}' "
-            "and ValueDescription ne null "
-            f"{report_type_filter} "
-            f"and ({value_filter})"
-        ),
+        "$filter": " and ".join(filters),
     }
+
+    if top_limit:
+        params["$top"] = str(top_limit)
+
+    return params
+
+
+def build_parameter_sets(
+    query_mode: str,
+    start_date_value: date,
+    values: list[str],
+    date_literal_format: str,
+) -> list[dict[str, str]]:
+    if query_mode == "Connection test":
+        return [
+            build_query_params(
+                start_date_value,
+                None,
+                include_date_filter=False,
+                include_value_filter=False,
+                date_literal_format=date_literal_format,
+                top_limit=10,
+            )
+        ]
+
+    if query_mode == "Date sample":
+        return [
+            build_query_params(
+                start_date_value,
+                None,
+                include_date_filter=True,
+                include_value_filter=False,
+                date_literal_format=date_literal_format,
+                top_limit=SAMPLE_ROW_LIMIT,
+            )
+        ]
+
+    return [
+        build_query_params(
+            start_date_value,
+            value_chunk,
+            include_date_filter=True,
+            include_value_filter=True,
+            date_literal_format=date_literal_format,
+        )
+        for value_chunk in chunks(values, METRIC_QUERY_CHUNK_SIZE)
+    ]
+
+
+def prepared_url(base_url: str, parameters: dict[str, str]) -> str:
+    request = requests.Request("GET", base_url, params=parameters)
+    return request.prepare().url or base_url
 
 
 def extract_rows(payload: dict) -> tuple[list[dict], str | None]:
@@ -280,46 +361,53 @@ def make_session() -> requests.Session:
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_all_data(
     base_url: str,
-    parameters: dict[str, str],
+    parameter_sets: list[dict[str, str]],
     max_pages: int,
     auth_signature: str,
     _username: str,
     _password: str,
 ) -> tuple[pd.DataFrame, dict[str, int | float | bool]]:
     rows: list[dict] = []
-    next_url: str | None = base_url
-    local_params = parameters.copy()
-    page = 0
+    total_pages = 0
     total_bytes = 0
     started_at = perf_counter()
     session = make_session()
     stopped_by_page_limit = False
 
-    while next_url:
-        page += 1
-        response = session.get(
-            next_url,
-            params=local_params if page == 1 else None,
-            auth=HTTPBasicAuth(_username, _password),
-            headers={"Accept": "application/json"},
-            timeout=120,
-        )
-        total_bytes += len(response.content)
-        response.raise_for_status()
+    for query_number, parameters in enumerate(parameter_sets, start=1):
+        next_url: str | None = base_url
+        local_params = parameters.copy()
+        query_page = 0
 
-        page_rows, next_link = extract_rows(response.json())
-        rows.extend(page_rows)
+        while next_url:
+            query_page += 1
+            total_pages += 1
+            response = session.get(
+                next_url,
+                params=local_params if query_page == 1 else None,
+                auth=HTTPBasicAuth(_username, _password),
+                headers={"Accept": "application/json"},
+                timeout=120,
+            )
+            total_bytes += len(response.content)
+            response.raise_for_status()
 
-        if page >= max_pages and next_link:
-            stopped_by_page_limit = True
-            break
+            page_rows, next_link = extract_rows(response.json())
+            for row in page_rows:
+                row["_QueryNumber"] = query_number
+            rows.extend(page_rows)
 
-        next_url = urljoin(base_url, next_link) if next_link else None
-        local_params = {}
+            if query_page >= max_pages and next_link:
+                stopped_by_page_limit = True
+                break
+
+            next_url = urljoin(base_url, next_link) if next_link else None
+            local_params = {}
 
     metadata = {
         "rows": len(rows),
-        "pages": page,
+        "queries": len(parameter_sets),
+        "pages": total_pages,
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
         "elapsed_seconds": round(perf_counter() - started_at, 2),
         "stopped_by_page_limit": stopped_by_page_limit,
@@ -456,14 +544,29 @@ def render_downloads(pivoted: pd.DataFrame, raw: pd.DataFrame, latest: pd.DataFr
     )
 
 
-def render_query_preview(query_params: dict[str, str], max_pages: int) -> None:
+def render_query_preview(
+    parameter_sets: list[dict[str, str]],
+    max_pages: int,
+    query_mode: str,
+    base_url: str,
+) -> None:
     st.subheader("API Test Setup")
     st.write("Use this first to confirm credentials, date range, pagination, and returned fields.")
-    st.code(BASE_URL, language="text")
+    first_url = prepared_url(base_url, parameter_sets[0])
+    st.code(first_url, language="text")
+    if len(first_url) > 1800:
+        st.warning(
+            f"The first request URL is {len(first_url):,} characters. "
+            "Long OData URLs can be rejected by IIS as HTTP 404. "
+            "Use Connection test or Date sample first, or reduce selected metrics."
+        )
     st.json(
         {
+            "query_mode": query_mode,
+            "query_count": len(parameter_sets),
             "max_pages": max_pages,
-            "parameters": query_params,
+            "first_request_url_length": len(first_url),
+            "first_parameters": parameter_sets[0],
         }
     )
 
@@ -472,8 +575,10 @@ def render_api_test(
     raw_df: pd.DataFrame,
     pivot_df: pd.DataFrame,
     metadata: dict[str, int | float | bool],
-    query_params: dict[str, str],
+    parameter_sets: list[dict[str, str]],
     max_pages: int,
+    query_mode: str,
+    base_url: str,
 ) -> None:
     st.subheader("Fetch Result")
     if metadata.get("stopped_by_page_limit"):
@@ -486,7 +591,7 @@ def render_api_test(
     metric_columns[0].metric("Raw rows", f"{len(raw_df):,}")
     metric_columns[1].metric("Reports", f"{pivot_df['ReportId'].nunique():,}")
     metric_columns[2].metric("Vessels", f"{pivot_df['ShipName'].nunique():,}")
-    metric_columns[3].metric("API pages", metadata["pages"])
+    metric_columns[3].metric("API queries/pages", f"{metadata['queries']}/{metadata['pages']}")
     metric_columns[4].metric("Downloaded MB", metadata["downloaded_mb"])
     metric_columns[5].metric("Elapsed sec", metadata["elapsed_seconds"])
 
@@ -500,7 +605,7 @@ def render_api_test(
             )
 
     with st.expander("Exact API request settings", expanded=False):
-        render_query_preview(query_params, max_pages)
+        render_query_preview(parameter_sets, max_pages, query_mode, base_url)
 
     left_column, right_column = st.columns(2)
     with left_column:
@@ -702,14 +807,37 @@ with st.sidebar:
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
 
+    api_base_url = st.text_input(
+        "OData endpoint",
+        value=get_secret("MARORKA_BASE_URL", BASE_URL),
+        help="Change this only when testing endpoint path/casing.",
+    ).strip()
+
     st.header("API Test Controls")
+    query_mode = st.radio(
+        "API request type",
+        options=QUERY_MODES,
+        index=0,
+        help=(
+            "Start with Connection test. If that works, try Date sample. "
+            "Use Selected metric pull for the dashboard data."
+        ),
+    )
+
     configured_days_back = get_int_secret("MARORKA_DAYS_BACK", DEFAULT_DAYS_BACK)
     default_start_date = date.today() - timedelta(days=configured_days_back)
     start_date_input = st.date_input("Start date", value=default_start_date)
 
+    date_format_label = st.selectbox(
+        "OData date literal",
+        options=list(DATE_LITERAL_FORMATS.keys()),
+        index=0,
+        help="Use Date only first because it matches the original Power Query style.",
+    )
+
     configured_max_pages = get_int_secret("MARORKA_MAX_PAGES", DEFAULT_MAX_PAGES)
     max_pages = st.number_input(
-        "Max OData pages",
+        "Max OData pages per query",
         min_value=1,
         max_value=ABSOLUTE_MAX_PAGES,
         value=min(configured_max_pages, ABSOLUTE_MAX_PAGES),
@@ -733,14 +861,23 @@ if refresh_fetch:
     st.session_state.load_requested = True
     st.rerun()
 
-if not selected_values:
+if query_mode == "Selected metric pull" and not selected_values:
     st.warning("Select at least one value description.")
     st.stop()
 
-query_params = build_query_params(start_date_input, selected_values)
+if not api_base_url:
+    st.warning("Enter an OData endpoint.")
+    st.stop()
+
+parameter_sets = build_parameter_sets(
+    query_mode,
+    start_date_input,
+    selected_values,
+    DATE_LITERAL_FORMATS[date_format_label],
+)
 
 if not st.session_state.get("load_requested"):
-    render_query_preview(query_params, int(max_pages))
+    render_query_preview(parameter_sets, int(max_pages), query_mode, api_base_url)
     st.info("Click Run API test in the sidebar when you are ready to call Marorka.")
     st.stop()
 
@@ -753,8 +890,8 @@ auth_signature = sha256(f"{username}:{password}".encode("utf-8")).hexdigest()
 try:
     with st.spinner("Fetching Marorka OData pages..."):
         raw_df, fetch_metadata = fetch_all_data(
-            BASE_URL,
-            query_params,
+            api_base_url,
+            parameter_sets,
             int(max_pages),
             auth_signature,
             username,
@@ -764,6 +901,16 @@ except requests.HTTPError as exc:
     response_text = exc.response.text[:1000] if exc.response is not None else str(exc)
     status_code = exc.response.status_code if exc.response is not None else "unknown"
     st.error(f"Marorka API returned HTTP {status_code}: {response_text}")
+    if exc.response is not None and exc.response.request is not None:
+        failed_url = exc.response.request.url
+        st.caption(f"Failed request URL length: {len(failed_url):,} characters")
+        with st.expander("Failed request URL", expanded=False):
+            st.code(failed_url, language="text")
+    st.info(
+        "For HTTP 404, first try API request type = Connection test. "
+        "If that works, try Date sample. If only Selected metric pull fails, "
+        "the metric filter is likely too large or one ValueDescription is invalid."
+    )
     st.stop()
 except Exception as exc:
     st.error(f"Could not load Marorka data: {exc}")
@@ -805,7 +952,15 @@ api_tab, report_tab, tables_tab = st.tabs(
 )
 
 with api_tab:
-    render_api_test(raw_df, pivot_df, fetch_metadata, query_params, int(max_pages))
+    render_api_test(
+        raw_df,
+        pivot_df,
+        fetch_metadata,
+        parameter_sets,
+        int(max_pages),
+        query_mode,
+        api_base_url,
+    )
 
 with report_tab:
     if filtered_pivot.empty:
