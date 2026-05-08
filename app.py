@@ -970,4 +970,694 @@ def render_query_preview(
 ) -> None:
     st.subheader("API Test Setup")
     st.write("Use this first to confirm credentials, date range, pagination, and returned fields.")
-    first_url = prepared_url(bas
+    first_url = prepared_url(base_url, parameter_sets[0])
+    st.code(first_url, language="text")
+    if len(first_url) > 1800:
+        st.warning(
+            f"The first request URL is {len(first_url):,} characters. "
+            "Long OData URLs can be rejected by IIS as HTTP 404. "
+            "Use Connection test or Date sample first, or reduce selected metrics."
+        )
+    st.json(
+        {
+            "query_mode": query_mode,
+            "query_count": len(parameter_sets),
+            "max_pages": max_pages,
+            "first_request_url_length": len(first_url),
+            "first_parameters": parameter_sets[0],
+        }
+    )
+
+
+def render_api_test(
+    raw_df: pd.DataFrame,
+    pivot_df: pd.DataFrame,
+    metadata: dict[str, int | float | bool],
+    parameter_sets: list[dict[str, str]],
+    max_pages: int,
+    query_mode: str,
+    base_url: str,
+) -> None:
+    st.subheader("Fetch Result")
+    if metadata.get("stopped_by_page_limit"):
+        st.warning(
+            "The fetch stopped at the selected max-page limit. Increase max pages "
+            "when you are ready to test the full API pull."
+        )
+
+    metric_columns = st.columns(6)
+    metric_columns[0].metric("Raw rows", f"{len(raw_df):,}")
+    metric_columns[1].metric("Reports", f"{pivot_df['ReportId'].nunique():,}")
+    metric_columns[2].metric("Vessels", f"{pivot_df['ShipName'].nunique():,}")
+    metric_columns[3].metric("API queries/pages", f"{metadata['queries']}/{metadata['pages']}")
+    metric_columns[4].metric("Downloaded MB", metadata["downloaded_mb"])
+    metric_columns[5].metric("Elapsed sec", metadata["elapsed_seconds"])
+
+    if "EndDateTimeGMT" in pivot_df.columns:
+        min_date = pivot_df["EndDateTimeGMT"].min()
+        max_date = pivot_df["EndDateTimeGMT"].max()
+        if pd.notna(min_date) and pd.notna(max_date):
+            st.caption(
+                f"Loaded report window: {min_date:%Y-%m-%d %H:%M} "
+                f"to {max_date:%Y-%m-%d %H:%M} GMT"
+            )
+
+    with st.expander("Exact API request settings", expanded=False):
+        render_query_preview(parameter_sets, max_pages, query_mode, base_url)
+
+    left_column, right_column = st.columns(2)
+    with left_column:
+        st.subheader("Rows By Report Type")
+        st.dataframe(
+            raw_df["ReportType"].value_counts(dropna=False).rename_axis("ReportType").reset_index(name="Rows"),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with right_column:
+        st.subheader("Rows By Vessel")
+        st.dataframe(
+            raw_df["ShipName"].value_counts(dropna=False).rename_axis("ShipName").reset_index(name="Rows"),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.subheader("Value Descriptions Returned")
+    value_counts = (
+        raw_df["ValueDescription"]
+        .value_counts(dropna=False)
+        .rename_axis("ValueDescription")
+        .reset_index(name="Rows")
+    )
+    st.dataframe(value_counts, use_container_width=True, hide_index=True)
+
+    st.subheader("Latest Report By Vessel")
+    latest_columns = [
+        "ShipName",
+        "ReportType",
+        "StartDateTimeGMT",
+        "EndDateTimeGMT",
+        "LapTime",
+        "StateName",
+        "ReportId",
+    ]
+    st.dataframe(
+        latest_by_vessel(pivot_df)[latest_columns],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Raw Sample")
+    st.dataframe(raw_df.head(100), use_container_width=True, hide_index=True)
+
+
+def report_selector(pivot_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series, pd.Series | None]:
+    vessel_options = sorted(pivot_df["ShipName"].dropna().unique().tolist())
+    selected_vessel = st.selectbox("Report vessel", vessel_options)
+    vessel_df = pivot_df[pivot_df["ShipName"] == selected_vessel].sort_values(
+        "EndDateTimeGMT", ascending=False
+    )
+
+    report_options = []
+    for _, row in vessel_df.iterrows():
+        report_options.append(
+            {
+                "ReportId": row["ReportId"],
+                "Label": (
+                    f"{format_datetime(row['EndDateTimeGMT'])} GMT"
+                    f" | {row.get('ReportType', '-')}"
+                    f" | {row.get('StateName', '-')}"
+                ),
+            }
+        )
+
+    selected_label = st.selectbox(
+        "Report date/time",
+        [option["Label"] for option in report_options],
+    )
+    selected_report_id = next(
+        option["ReportId"] for option in report_options if option["Label"] == selected_label
+    )
+
+    selected_index = vessel_df.index[vessel_df["ReportId"] == selected_report_id][0]
+    selected_row = vessel_df.loc[selected_index]
+
+    chronological = vessel_df.sort_values("EndDateTimeGMT")
+    previous_rows = chronological[chronological["EndDateTimeGMT"] < selected_row["EndDateTimeGMT"]]
+    previous_row = previous_rows.iloc[-1] if not previous_rows.empty else None
+    return vessel_df, selected_row, previous_row
+
+
+def render_metric_cards(row: pd.Series, previous_row: pd.Series | None) -> None:
+    available_metrics = [(label, column) for label, column in KEY_METRICS if column in row.index]
+    for chunk_start in range(0, len(available_metrics), 5):
+        columns = st.columns(min(5, len(available_metrics) - chunk_start))
+        for metric_column, (label, source_column) in zip(
+            columns, available_metrics[chunk_start : chunk_start + 5]
+        ):
+            delta = None
+            if previous_row is not None and source_column in previous_row.index:
+                delta = numeric_delta(row[source_column], previous_row[source_column])
+            metric_column.metric(label, format_value(row[source_column]), delta=delta)
+
+
+def section_dataframe(row: pd.Series, section_columns: list[str]) -> pd.DataFrame:
+    records = []
+    for column in section_columns:
+        if column in row.index and pd.notna(row[column]):
+            records.append({"Parameter": column, "Value": format_value(row[column])})
+    return pd.DataFrame(records)
+
+
+def render_report_presentation(pivot_df: pd.DataFrame) -> None:
+    st.subheader("Report Presentation")
+    vessel_df, selected_row, previous_row = report_selector(pivot_df)
+
+    header_columns = st.columns([2, 1, 1, 1])
+    header_columns[0].markdown(f"### {selected_row.get('ShipName', '-')}")
+    header_columns[1].metric("Report Type", selected_row.get("ReportType", "-"))
+    header_columns[2].metric("State", selected_row.get("StateName", "-"))
+    header_columns[3].metric("Report ID", selected_row.get("ReportId", "-"))
+
+    time_columns = st.columns(3)
+    time_columns[0].metric("Start GMT", format_datetime(selected_row.get("StartDateTimeGMT")))
+    time_columns[1].metric("End GMT", format_datetime(selected_row.get("EndDateTimeGMT")))
+    time_columns[2].metric("Lap Time", format_value(selected_row.get("LapTime")))
+
+    st.divider()
+    render_metric_cards(selected_row, previous_row)
+    st.caption("Deltas compare against the previous report for the same vessel when numeric values are available.")
+
+    st.divider()
+    section_names = list(REPORT_SECTIONS.keys())
+    for chunk_start in range(0, len(section_names), 2):
+        columns = st.columns(2)
+        for section_column, section_name in zip(columns, section_names[chunk_start : chunk_start + 2]):
+            with section_column:
+                section = section_dataframe(selected_row, REPORT_SECTIONS[section_name])
+                st.subheader(section_name)
+                if section.empty:
+                    st.info("No returned values for this section.")
+                else:
+                    st.dataframe(section, use_container_width=True, hide_index=True)
+
+    trend_columns = [
+        "Engine Distance [nm]",
+        "Distance Over Ground [nm]",
+        "Power from Torque Meter [kW]",
+        "Total DG Power [kW] (kW)",
+        "Reefer Power [kW]",
+    ]
+    available_trends = [column for column in trend_columns if column in vessel_df.columns]
+    if available_trends:
+        st.subheader("Recent Numeric Trend")
+        trend_df = vessel_df.sort_values("EndDateTimeGMT")[["EndDateTimeGMT"] + available_trends].copy()
+        for column in available_trends:
+            trend_df[column] = pd.to_numeric(trend_df[column], errors="coerce")
+        trend_df = trend_df.set_index("EndDateTimeGMT").dropna(how="all")
+        if not trend_df.empty:
+            st.line_chart(trend_df)
+
+
+def render_data_tables(
+    filtered_pivot: pd.DataFrame,
+    filtered_raw: pd.DataFrame,
+    latest_df: pd.DataFrame,
+) -> None:
+    render_downloads(filtered_pivot, filtered_raw, latest_df)
+
+    st.subheader("Pivoted Data")
+    st.dataframe(
+        filtered_pivot.sort_values("EndDateTimeGMT", ascending=False),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Raw Data")
+    st.dataframe(
+        filtered_raw.sort_values(["ShipName", "EndDateTimeGMT"], ascending=[True, False]),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def filter_by_numeric_min(df: pd.DataFrame, column: str, minimum_value: float | None) -> pd.DataFrame:
+    if minimum_value is None or column not in df.columns:
+        return df
+    values = pd.to_numeric(df[column], errors="coerce")
+    return df[values >= minimum_value]
+
+
+def apply_dashboard_filters(
+    df: pd.DataFrame,
+    selected_vessels: list[str],
+    selected_report_types: list[str],
+    selected_states: list[str],
+    numeric_minimums: dict[str, float | None],
+    search_text: str,
+    start_date_filter: date | None = None,
+    end_date_filter: date | None = None,
+) -> pd.DataFrame:
+    filtered = df.copy()
+
+    if start_date_filter is not None and "EndDateTimeGMT" in filtered.columns:
+        start_timestamp = pd.Timestamp(start_date_filter, tz="UTC")
+        filtered = filtered[filtered["EndDateTimeGMT"] >= start_timestamp]
+    if end_date_filter is not None and "EndDateTimeGMT" in filtered.columns:
+        end_timestamp = pd.Timestamp(end_date_filter + timedelta(days=1), tz="UTC")
+        filtered = filtered[filtered["EndDateTimeGMT"] < end_timestamp]
+
+    if selected_vessels:
+        filtered = filtered[filtered["ShipName"].isin(selected_vessels)]
+    if selected_report_types:
+        filtered = filtered[filtered["ReportType"].isin(selected_report_types)]
+    if selected_states:
+        filtered = filtered[filtered["StateName"].isin(selected_states)]
+
+    for column, minimum_value in numeric_minimums.items():
+        filtered = filter_by_numeric_min(filtered, column, minimum_value)
+
+    if search_text.strip():
+        search_value = search_text.strip().casefold()
+        searchable = filtered.astype("string").apply(
+            lambda column: column.str.casefold().str.contains(search_value, na=False)
+        )
+        filtered = filtered[searchable.any(axis=1)]
+
+    return filtered
+
+
+def format_percentage(value: object) -> str:
+    if pd.isna(value):
+        return "-"
+    numeric_value = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric_value):
+        return "-"
+    return f"{numeric_value:.1%}"
+
+
+def parse_optional_float(value: str) -> float | None:
+    if not value.strip():
+        return None
+    try:
+        return float(value.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def mean_metric(df: pd.DataFrame, column: str) -> object:
+    if column not in df.columns:
+        return pd.NA
+    return pd.to_numeric(df[column], errors="coerce").mean()
+
+
+def sum_metric(df: pd.DataFrame, column: str) -> object:
+    if column not in df.columns:
+        return pd.NA
+    return pd.to_numeric(df[column], errors="coerce").sum(min_count=1)
+
+
+def render_dashboard_kpis(filtered_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
+    def latest_value() -> object:
+        if "EndDateTimeGMT" not in filtered_df.columns or filtered_df.empty:
+            return pd.NA
+        return filtered_df["EndDateTimeGMT"].max()
+
+    kpi_columns = st.columns(4)
+    kpi_columns[0].metric(
+        "Average of Calculated Slip",
+        format_percentage(mean_metric(filtered_df, "Calculated Slip")),
+    )
+    kpi_columns[1].metric(
+        "Average of ME Load [%MCR]",
+        format_percentage(mean_metric(filtered_df, "ME Load [%MCR]")),
+    )
+    kpi_columns[2].metric(
+        "Average of SFOC [gr/Kwh]",
+        format_value(mean_metric(filtered_df, "SFOC [gr/Kwh]")),
+    )
+    kpi_columns[3].metric(
+        "Sum of Boiler Sum",
+        format_value(sum_metric(boiler_df, "Boiler Sum")),
+        help="This KPI uses the independent Boiler KPI Filters, not the main KPI/table filters.",
+    )
+
+    context_columns = st.columns(3)
+    context_columns[0].metric("Filtered reports", f"{filtered_df['ReportId'].nunique():,}")
+    context_columns[1].metric("Filtered vessels", f"{filtered_df['ShipName'].nunique():,}")
+    context_columns[2].metric("Latest GMT", format_datetime(latest_value()))
+
+    if len(boiler_df) != len(filtered_df):
+        st.caption(
+            f"Boiler KPI uses {len(boiler_df):,} rows from its independent filter set; "
+            f"the other KPIs use {len(filtered_df):,} rows from the main filters."
+        )
+
+
+def render_dashboard_table(filtered_df: pd.DataFrame, visible_columns: list[str]) -> None:
+    available_columns = [column for column in visible_columns if column in filtered_df.columns]
+    if not available_columns:
+        available_columns = filtered_df.columns.tolist()
+
+    table_df = filtered_df.sort_values("EndDateTimeGMT", ascending=False)[available_columns]
+    st.dataframe(table_df, use_container_width=True, hide_index=True)
+
+
+def render_operational_dashboard(
+    filtered_df: pd.DataFrame,
+    boiler_df: pd.DataFrame,
+    raw_df: pd.DataFrame,
+    visible_columns: list[str],
+) -> None:
+    if filtered_df.empty:
+        st.warning("No reports match the current filters.")
+        return
+
+    render_dashboard_kpis(filtered_df, boiler_df)
+
+    st.subheader("Latest report by vessel")
+    latest_columns = [column for column in DEFAULT_TABLE_COLUMNS if column in filtered_df.columns]
+    st.dataframe(
+        latest_by_vessel(filtered_df)[latest_columns],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.subheader("Filtered report table")
+    render_dashboard_table(filtered_df, visible_columns)
+
+    filtered_report_ids = set(filtered_df["ReportId"].dropna().tolist())
+    filtered_raw = raw_df[raw_df["ReportId"].isin(filtered_report_ids)].copy()
+    render_downloads(filtered_df, filtered_raw, latest_by_vessel(filtered_df))
+
+
+if not require_dashboard_password():
+    st.stop()
+
+st.title(APP_TITLE)
+st.caption("Fleet performance dashboard powered by cached Marorka data and Excel-equivalent calculations.")
+
+with st.sidebar:
+    username = get_secret("MARORKA_USERNAME")
+    password = get_secret("MARORKA_PASSWORD")
+
+    api_base_url = get_secret("MARORKA_BASE_URL", BASE_URL).strip() or BASE_URL
+
+    st.header("Data Window")
+    start_date_input = st.date_input("Start date", value=get_default_start_date())
+    end_date_input = st.date_input("End date", value=date.today())
+
+    configured_max_pages = get_int_secret("MARORKA_MAX_PAGES", DEFAULT_MAX_PAGES)
+    max_pages = st.number_input(
+        "Max OData pages per query",
+        min_value=1,
+        max_value=ABSOLUTE_MAX_PAGES,
+        value=min(configured_max_pages, ABSOLUTE_MAX_PAGES),
+        step=1,
+    )
+
+    with st.expander("Advanced API options"):
+        query_mode = st.radio(
+            "API request type",
+            options=QUERY_MODES,
+            index=0,
+            help="Use Excel-style full pull for the dashboard. Other modes are diagnostics.",
+        )
+        api_ship_name = st.text_input(
+            "Optional API vessel filter",
+            value=get_secret("MARORKA_SHIP_NAME", DEFAULT_API_SHIP_FILTER),
+            help="Leave blank for all vessels. Use a vessel name only for focused debugging.",
+        ).strip()
+        date_format_label = st.selectbox(
+            "OData date literal",
+            options=list(DATE_LITERAL_FORMATS.keys()),
+            index=0,
+            help="Date only matches the original Power Query style.",
+        )
+
+        if query_mode == "Selected metric pull":
+            selected_values = st.multiselect(
+                "Value descriptions",
+                options=DEFAULT_VALUES,
+                default=DEFAULT_VALUES,
+            )
+        else:
+            selected_values = DEFAULT_VALUES
+
+    run_fetch = st.button("Load dashboard data", type="primary", use_container_width=True)
+    refresh_fetch = st.button("Refresh and rerun", use_container_width=True)
+
+if run_fetch:
+    st.session_state.load_requested = True
+if refresh_fetch:
+    fetch_all_data.clear()
+    transform_report_data.clear()
+    st.session_state.load_requested = True
+    st.rerun()
+
+if end_date_input < start_date_input:
+    st.warning("End date must be on or after start date.")
+    st.stop()
+
+if query_mode == "Selected metric pull" and not selected_values:
+    st.warning("Select at least one value description.")
+    st.stop()
+
+parameter_sets = build_parameter_sets(
+    query_mode,
+    start_date_input,
+    end_date_input,
+    selected_values,
+    DATE_LITERAL_FORMATS[date_format_label],
+    api_ship_name,
+)
+
+if not st.session_state.get("load_requested"):
+    render_query_preview(parameter_sets, int(max_pages), query_mode, api_base_url)
+    st.info("Choose a data window, then click Load dashboard data.")
+    st.stop()
+
+if not username or not password:
+    st.error(
+        "Marorka API credentials are not configured. Add MARORKA_USERNAME and "
+        "MARORKA_PASSWORD in Streamlit secrets."
+    )
+    st.stop()
+
+auth_signature = sha256(f"{username}:{password}".encode("utf-8")).hexdigest()
+
+try:
+    with st.spinner("Fetching Marorka OData pages..."):
+        raw_df, fetch_metadata = fetch_all_data(
+            api_base_url,
+            parameter_sets,
+            int(max_pages),
+            auth_signature,
+            username,
+            password,
+        )
+except requests.HTTPError as exc:
+    response_text = exc.response.text[:1000] if exc.response is not None else str(exc)
+    status_code = exc.response.status_code if exc.response is not None else "unknown"
+    st.error(f"Marorka API returned HTTP {status_code}: {response_text}")
+    if exc.response is not None and exc.response.request is not None:
+        failed_url = exc.response.request.url
+        st.caption(f"Failed request URL length: {len(failed_url):,} characters")
+        with st.expander("Failed request URL", expanded=False):
+            st.code(failed_url, language="text")
+    st.info(
+        "For HTTP 404, first try API request type = Connection test. "
+        "If that works, try Date sample. If only Selected metric pull fails, "
+        "the metric filter is likely too large or one ValueDescription is invalid."
+    )
+    st.stop()
+except Exception as exc:
+    st.error(f"Could not load Marorka data: {exc}")
+    st.stop()
+
+raw_df, pivot_df = transform_report_data(raw_df)
+
+if pivot_df.empty:
+    st.warning("No data returned for the selected date and metric filters.")
+    st.stop()
+
+with st.sidebar:
+    st.header("Dashboard Filters")
+    vessel_options = sorted(pivot_df["ShipName"].dropna().unique().tolist())
+    loaded_start_date = pivot_df["EndDateTimeGMT"].min().date()
+    loaded_end_date = pivot_df["EndDateTimeGMT"].max().date()
+
+    main_date_range = st.date_input(
+        "KPI/table date range",
+        value=(loaded_start_date, loaded_end_date),
+        min_value=loaded_start_date,
+        max_value=loaded_end_date,
+        key="filter_main_date_range",
+    )
+    if isinstance(main_date_range, tuple) and len(main_date_range) == 2:
+        main_start_date, main_end_date = main_date_range
+    else:
+        main_start_date, main_end_date = loaded_start_date, loaded_end_date
+
+    selected_vessels = st.multiselect(
+        "Vessels",
+        options=vessel_options,
+        default=[],
+        key="filter_vessels",
+        help="Leave blank to include all vessels.",
+    )
+
+    report_type_options = sorted(pivot_df["ReportType"].dropna().unique().tolist())
+    selected_report_types = st.multiselect(
+        "Report types",
+        options=report_type_options,
+        default=[],
+        key="filter_report_types",
+        help="Leave blank to include all report types.",
+    )
+
+    state_options = sorted(pivot_df["StateName"].dropna().unique().tolist())
+    selected_states = st.multiselect(
+        "States",
+        options=state_options,
+        default=[],
+        key="filter_states",
+        help="Leave blank to include all states.",
+    )
+
+    search_text = st.text_input(
+        "Table search",
+        key="filter_search_text",
+        help="Searches across the filtered table.",
+    )
+
+    with st.expander("Numeric filters"):
+        numeric_minimums = {}
+        for label, column in NUMERIC_FILTER_COLUMNS:
+            if column in pivot_df.columns:
+                text_value = st.text_input(
+                    label,
+                    key=f"filter_min_{column}",
+                    help="Blank means no minimum. Example: ME Load >= 0.1 keeps load above 10%.",
+                )
+                parsed_value = parse_optional_float(text_value)
+                if text_value.strip() and parsed_value is None:
+                    st.warning(f"Ignoring invalid number for {label.strip()}.")
+                numeric_minimums[column] = parsed_value
+
+    with st.expander("Boiler KPI Filters"):
+        st.caption("These filters affect only the Sum of Boiler Sum KPI.")
+        boiler_date_range = st.date_input(
+            "Boiler date range",
+            value=(loaded_start_date, loaded_end_date),
+            min_value=loaded_start_date,
+            max_value=loaded_end_date,
+            key="filter_boiler_date_range",
+        )
+        if isinstance(boiler_date_range, tuple) and len(boiler_date_range) == 2:
+            boiler_start_date, boiler_end_date = boiler_date_range
+        else:
+            boiler_start_date, boiler_end_date = loaded_start_date, loaded_end_date
+
+        boiler_vessels = st.multiselect(
+            "Boiler vessels",
+            options=vessel_options,
+            default=[],
+            key="filter_boiler_vessels",
+            help="Leave blank to include all vessels for the boiler KPI.",
+        )
+        boiler_report_types = st.multiselect(
+            "Boiler report types",
+            options=report_type_options,
+            default=[],
+            key="filter_boiler_report_types",
+            help="Leave blank to include all report types for the boiler KPI.",
+        )
+        boiler_states = st.multiselect(
+            "Boiler states",
+            options=state_options,
+            default=[],
+            key="filter_boiler_states",
+            help="Leave blank to include all states for the boiler KPI.",
+        )
+
+        boiler_numeric_minimums = {}
+        for label, column in BOILER_FILTER_COLUMNS:
+            if column in pivot_df.columns:
+                text_value = st.text_input(
+                    label,
+                    key=f"filter_boiler_min_{column}",
+                    help="Blank means no minimum.",
+                )
+                parsed_value = parse_optional_float(text_value)
+                if text_value.strip() and parsed_value is None:
+                    st.warning(f"Ignoring invalid boiler number for {label.strip()}.")
+                boiler_numeric_minimums[column] = parsed_value
+
+    with st.expander("Table columns"):
+        default_visible_columns = [
+            column for column in DEFAULT_TABLE_COLUMNS if column in pivot_df.columns
+        ]
+        visible_columns = st.multiselect(
+            "Visible columns",
+            options=pivot_df.columns.tolist(),
+            default=default_visible_columns,
+            key="filter_visible_columns",
+        )
+
+filtered_pivot = apply_dashboard_filters(
+    pivot_df,
+    selected_vessels,
+    selected_report_types,
+    selected_states,
+    numeric_minimums,
+    search_text,
+    main_start_date,
+    main_end_date,
+)
+
+boiler_filtered_pivot = apply_dashboard_filters(
+    pivot_df,
+    boiler_vessels,
+    boiler_report_types,
+    boiler_states,
+    boiler_numeric_minimums,
+    "",
+    boiler_start_date,
+    boiler_end_date,
+)
+
+filtered_report_ids = set(filtered_pivot["ReportId"].dropna().tolist())
+filtered_raw = raw_df[raw_df["ReportId"].isin(filtered_report_ids)].copy()
+latest_df = latest_by_vessel(filtered_pivot)
+
+dashboard_tab, report_tab, api_tab, export_tab = st.tabs(
+    ["Dashboard", "Single Report", "API Diagnostics", "Export And Raw Data"]
+)
+
+with dashboard_tab:
+    st.subheader("Dashboard")
+    render_operational_dashboard(filtered_pivot, boiler_filtered_pivot, raw_df, visible_columns)
+
+with report_tab:
+    if filtered_pivot.empty:
+        st.warning("No reports match the current filters.")
+    else:
+        render_report_presentation(filtered_pivot)
+
+with api_tab:
+    render_api_test(
+        raw_df,
+        pivot_df,
+        fetch_metadata,
+        parameter_sets,
+        int(max_pages),
+        query_mode,
+        api_base_url,
+    )
+
+with export_tab:
+    if filtered_pivot.empty:
+        st.warning("No reports match the current filters.")
+    else:
+        render_data_tables(filtered_pivot, filtered_raw, latest_df)
