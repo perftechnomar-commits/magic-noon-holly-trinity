@@ -841,6 +841,7 @@ def pivot_report_data(df: pd.DataFrame) -> pd.DataFrame:
             columns="ValueDescription",
             values="ReportedValue",
             aggfunc="first",
+            dropna=False,
         )
         .reset_index()
         .sort_values(["ShipName", "EndDateTimeGMT", "ReportId"], na_position="last")
@@ -1844,8 +1845,30 @@ if pivot_df.empty:
 with st.sidebar:
     st.header("Dashboard Filters")
     vessel_options = sorted(pivot_df["ShipName"].dropna().unique().tolist())
+    raw_vessel_options = sorted(raw_df["ShipName"].dropna().unique().tolist())
     loaded_start_date = start_date_input
     loaded_end_date = end_date_input
+
+    with st.expander("Loaded data coverage"):
+        st.metric("API rows", f"{len(raw_df):,}")
+        st.metric("Reports", f"{pivot_df['ReportId'].nunique():,}")
+        st.metric("Vessels", f"{len(vessel_options):,}")
+        if fetch_metadata.get("stopped_by_page_limit"):
+            st.warning("The API fetch reached the safety page limit before Marorka finished paging.")
+        vessel_lookup = st.text_input(
+            "Find loaded vessel",
+            key="coverage_vessel_lookup",
+            help="Checks vessel names returned by the API for this data window.",
+        )
+        if vessel_lookup.strip():
+            needle = vessel_lookup.strip().casefold()
+            matches = [
+                vessel for vessel in raw_vessel_options if needle in vessel.casefold()
+            ]
+            if matches:
+                st.write(", ".join(matches[:20]))
+            else:
+                st.warning("No matching vessel name was returned by the API for this data window.")
 
     selected_vessels = st.multiselect(
         "Vessels",
