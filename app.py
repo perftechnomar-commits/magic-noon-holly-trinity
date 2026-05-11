@@ -14,10 +14,6 @@ from requests.auth import HTTPBasicAuth
 from urllib3.util.retry import Retry
 
 
-# =============================================================================
-# Configuration
-# =============================================================================
-
 APP_TITLE = "Fleet Performance Dashboard"
 BASE_URL = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 
@@ -59,8 +55,6 @@ VESSEL_DISCOVERY_VALUES = [
     "Shaft 1 RPM (rpm)",
 ]
 
-# These are the fields required for the dashboard calculations and core display.
-# Extra variables can still be selected in the UI.
 DEFAULT_VALUES = [
     "Steaming Time Since Last Report [hh:mm]",
     "Draft Forward [m] (m)",
@@ -150,8 +144,6 @@ DEFAULT_VALUES = [
     "Torsional Moments [%]",
 ]
 
-# Canonical names used internally. This handles naming differences between
-# Marorka, your Python app, and the original Power Query.
 COLUMN_ALIASES = {
     "Diesel Generators - HSHFO": "Diesel Generator - HSHFO",
     "Diesel Generators - HSLFO": "Diesel Generator - HSLFO",
@@ -332,10 +324,6 @@ REPORT_SECTIONS = {
     ],
 }
 
-
-# =============================================================================
-# Streamlit setup and styling
-# =============================================================================
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
@@ -519,10 +507,6 @@ def render_app_header() -> None:
     )
 
 
-# =============================================================================
-# Secrets, authentication, and small utilities
-# =============================================================================
-
 
 def get_secret(name: str, default: str = "") -> str:
     try:
@@ -599,10 +583,6 @@ def date_chunks(start_date_value: date, end_date_value: date, chunk_days: int = 
         chunk_start = chunk_end + timedelta(days=1)
     return ranges
 
-
-# =============================================================================
-# OData query construction
-# =============================================================================
 
 
 def escape_odata_text(value: str) -> str:
@@ -783,11 +763,6 @@ def prepared_url(base_url: str, parameters: dict[str, str]) -> str:
     return request.prepare().url or base_url
 
 
-# =============================================================================
-# API client
-# =============================================================================
-
-
 def make_session() -> requests.Session:
     retry = Retry(
         total=3,
@@ -964,11 +939,6 @@ def fetch_all_data(
     return pd.DataFrame(rows), metadata
 
 
-# =============================================================================
-# Data preparation and calculations
-# =============================================================================
-
-
 def parse_datetime_column(series: pd.Series) -> pd.Series:
     text = series.astype("string")
     odata_ms = text.str.extract(r"/Date\((-?\d+)").iloc[:, 0]
@@ -1078,7 +1048,6 @@ def add_power_query_calculations(df: pd.DataFrame) -> pd.DataFrame:
     )
     result["Calculated Slip"] = round_series(1 - safe_divide(distance_over_ground, engine_distance))
 
-    # Power Query source of truth used 8.3280.
     result["Corrected Speed for 7% Slip"] = round_series(shaft_rpm * 0.030123 * 8.3280)
 
     result["Consumption ME 24 Hours [MT]"] = round_series(
@@ -1185,8 +1154,6 @@ def add_power_query_calculations(df: pd.DataFrame) -> pd.DataFrame:
 
     corrected_speed = numeric_column(result, "Corrected Speed for 7% Slip")
 
-    # Power Query source formula:
-    # 0.0141024*s^3 - 0.1092988*s^2 + 1.6175387*s
     cp_consumption = (
         corrected_speed.pow(3) * 0.0141024
         + corrected_speed.pow(2) * -0.1092988
@@ -1266,11 +1233,6 @@ def transform_report_data(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
     pivoted = normalize_columns(pivoted)
     calculated = add_power_query_calculations(pivoted)
     return prepared_raw, calculated
-
-
-# =============================================================================
-# Formatting and export helpers
-# =============================================================================
 
 
 def format_value(value: object) -> str:
@@ -1387,10 +1349,6 @@ def format_report_table_for_display(table_df: pd.DataFrame) -> pd.DataFrame:
 def display_report_table(table_df: pd.DataFrame) -> None:
     st.dataframe(format_report_table_for_display(table_df), use_container_width=True, hide_index=True)
 
-
-# =============================================================================
-# Filters and KPI helpers
-# =============================================================================
 
 
 def numeric_scalar(value: object) -> float | None:
@@ -1601,11 +1559,6 @@ def render_numeric_range_filters(
         ranges[column] = (low_value, high_value)
 
     return ranges
-
-
-# =============================================================================
-# Dashboard rendering
-# =============================================================================
 
 
 def render_dashboard_kpis(filtered_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
@@ -1866,11 +1819,6 @@ def render_validation_table(pivot_df: pd.DataFrame) -> None:
         }
     )
     st.dataframe(diagnostics, use_container_width=True, hide_index=True)
-
-
-# =============================================================================
-# Main application flow
-# =============================================================================
 
 
 def main() -> None:
