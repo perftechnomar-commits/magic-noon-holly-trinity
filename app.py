@@ -48,13 +48,22 @@ INDEX_COLUMNS = [
 ]
 
 VESSEL_DISCOVERY_VALUES = [
+    "Steaming Time Since Last Report [hh:mm]",
+    "Draft Forward [m] (m)",
+    "Draft Aft [m] (m)",
     "Engine Distance [nm]",
+    "Shaft 1 RPM (rpm)",
 ]
 
 DEFAULT_VALUES = [
+    # Calculated Slip
     "Engine Distance [nm]",
     "Distance Over Ground [nm]",
+
+    # ME Load [%MCR]
     "ME Load [%MCR]",
+
+    # SFOC [gr/Kwh]
     "Power from Torque Meter [kW]",
     "Main Engine - HSHFO",
     "Main Engine - HSLFO",
@@ -63,6 +72,8 @@ DEFAULT_VALUES = [
     "Main Engine - ULSLFO",
     "Main Engine - VLSHFO",
     "Main Engine - VLSLFO",
+
+    # Boiler Sum
     "Boiler - HSHFO",
     "Boiler - HSLFO",
     "Boiler - MGO",
@@ -465,22 +476,26 @@ def get_default_start_date() -> date:
 
 
 def default_report_window(today: date | None = None) -> tuple[date, date]:
+    """Default monthly report window: first day two months back through current month end.
+
+    Example: any date in May 2026 -> 01/03/2026 to 31/05/2026.
+    """
     today = today or date.today()
 
-    month = today.month - 2
-    year = today.year
-    while month <= 0:
-        month += 12
-        year -= 1
+    start_month = today.month - 2
+    start_year = today.year
+    while start_month <= 0:
+        start_month += 12
+        start_year -= 1
 
-    start_date = date(year, month, 1)
+    start_date_value = date(start_year, start_month, 1)
 
     if today.month == 12:
-        end_date = date(today.year, 12, 31)
+        end_date_value = date(today.year, 12, 31)
     else:
-        end_date = date(today.year, today.month + 1, 1) - timedelta(days=1)
+        end_date_value = date(today.year, today.month + 1, 1) - timedelta(days=1)
 
-    return start_date, end_date
+    return start_date_value, end_date_value
 
 
 def require_dashboard_password() -> bool:
@@ -590,8 +605,7 @@ def build_query_params(
 
 
 def build_vessel_query_params(start_date_value: date, end_date_value: date, date_literal_format: str) -> dict[str, str]:
-    lookup_start_date = max(start_date_value, end_date_value - timedelta(days=14))
-    start_datetime = lookup_start_date.strftime(date_literal_format)
+    start_datetime = start_date_value.strftime(date_literal_format)
     end_exclusive_datetime = (end_date_value + timedelta(days=1)).strftime(date_literal_format)
     filters = [
         "ValueDescription ne null",
@@ -1808,87 +1822,15 @@ def main() -> None:
             fetch_all_data.clear()
             transform_report_data.clear()
 
-        vessel_query_params = build_vessel_query_params(
-            start_date_input,
-            end_date_input,
-            DATE_LITERAL_FORMATS[date_format_label],
-        )
-        try:
-            with st.spinner("Loading vessel list from Marorka..."):
-                vessel_options_before_load, vessel_metadata = fetch_vessel_options(
-                    api_base_url,
-                    vessel_query_params,
-                    page_safety_limit,
-                    auth_signature,
-                    username,
-                    password,
-                )
-        except requests.HTTPError as exc:
-            status_code = exc.response.status_code if exc.response is not None else "unknown"
-            st.error(f"Could not load vessel list from Marorka. HTTP {status_code}.")
-            st.stop()
-        except Exception as exc:
-            st.error(f"Could not load vessel list from Marorka: {exc}")
-            st.stop()
-
-        if vessel_metadata.get("stopped_by_page_limit"):
-            st.warning("The vessel list reached the API safety page limit and may be incomplete.")
-        if not vessel_options_before_load:
-            st.warning("No vessels were returned by the API for this date window.")
-            st.stop()
-
-        vessel_select_options = [""] + vessel_options_before_load
-        if st.session_state.get("api_ship_name_select", "") not in vessel_select_options:
-            st.session_state.api_ship_name_select = ""
-
-        selected_api_vessel = st.selectbox("Vessel to load", options=vessel_select_options, key="api_ship_name_select")
-        api_ship_name = selected_api_vessel.strip()
+        api_ship_name = st.text_input(
+            "Vessel to load",
+            value=st.session_state.get("api_ship_name_input", ""),
+            key="api_ship_name_input",
+            help="Type the vessel name exactly as it appears in Marorka, e.g. Ateti.",
+        ).strip()
 
         selected_values = DEFAULT_VALUES
-        if api_ship_name:
-            value_query_params = build_value_description_query_params(
-                start_date_input,
-                end_date_input,
-                DATE_LITERAL_FORMATS[date_format_label],
-                api_ship_name,
-            )
-            try:
-                with st.spinner("Loading API variable list from Marorka..."):
-                    value_description_options, value_metadata = fetch_value_descriptions(
-                        api_base_url,
-                        value_query_params,
-                        page_safety_limit,
-                        auth_signature,
-                        username,
-                        password,
-                    )
-            except requests.HTTPError as exc:
-                status_code = exc.response.status_code if exc.response is not None else "unknown"
-                st.error(f"Could not load API variable list from Marorka. HTTP {status_code}.")
-                st.stop()
-            except Exception as exc:
-                st.error(f"Could not load API variable list from Marorka: {exc}")
-                st.stop()
-
-            if value_metadata.get("stopped_by_page_limit"):
-                st.warning("The API variable list reached the safety page limit and may be incomplete.")
-
-            previous_extra_values = st.session_state.get("api_extra_values", [])
-            if not isinstance(previous_extra_values, list):
-                previous_extra_values = []
-            extra_value_options = unique_preserve_order(
-                previous_extra_values + [value for value in value_description_options if value not in DEFAULT_VALUES]
-            )
-            extra_values = st.multiselect(
-                "Additional API variables",
-                options=extra_value_options,
-                default=[],
-                key="api_extra_values",
-                help="The dashboard loads its required variables automatically. Add more only when you need them for table columns or numeric filters.",
-            )
-            selected_values = unique_preserve_order(DEFAULT_VALUES + extra_values)
-            st.caption(f"Dashboard will load {len(selected_values):,} API variables.")
-
+        st.caption(f"Dashboard will load {len(selected_values):,} required API variables.")
         load_fetch = st.button("Load dashboard data", type="primary", use_container_width=True, disabled=not bool(api_ship_name))
 
     active_request = {
