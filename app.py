@@ -17,7 +17,7 @@ from urllib3.util.retry import Retry
 APP_TITLE = "Magic Noon alla Mantalos"
 BASE_URL = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 DEFAULT_DAYS_BACK = 30
-DEFAULT_START_DATE = "2026-01-01"
+DEFAULT_START_DATE = "01-01-2026"
 PAGE_SAFETY_LIMIT = 2000
 SAMPLE_ROW_LIMIT = 100
 METRIC_QUERY_CHUNK_SIZE = 8
