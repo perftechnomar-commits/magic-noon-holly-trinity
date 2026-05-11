@@ -83,6 +83,22 @@ DEFAULT_VALUES = [
     "Boiler - VLSLFO",
 ]
 
+VESSEL_GROUPS = {
+    "Fleet 1": ["ATETI", "CMA CGM THALASSA", "CZECH", "DOLPHIN II", "GSL CHRISTEL ELISABETH", "GSL VINIA", "MYNY", "SYDNEY EXPRESS"],
+    "Fleet 2": ["AGIOS DIMITRIOS", "ELENI T", "MAIRA", "MELINA", "NEWYORKER", "NIKOLAS", "TORRANCE"],
+    "Fleet 3": ["BREMERHAVEN EXPRESS", "CMA CGM ALCAZAR", "GSL ALICE", "GSL CHATEAU D'IF", "GSL ELEFTHERIA", "GSL MAREN", "GSL MELINA", "ISTANBUL EXPRESS"],
+    "Fleet 4": ["ANTHEA Y", "COLOMBIA EXPRESS", "COSTA RICA EXPRESS", "JAMAICA EXPRESS", "MEXICO EXPRESS", "NICARAGUA EXPRESS", "PANAMA EXPRESS", "ZIM NORFOLK", "ZIM XIAMEN"],
+    "Fleet 9": ["CMA CGM AMERICA", "CMA CGM SAMBHAR", "GSL ELENI", "GSL GRANIA", "GSL KALLIOPI", "GSL NINGBO", "MSC QINGDAO", "MSC TIANJIN"],
+    "Fleet 10": ["CAPTAIN THANASIS I", "CMA CGM JAMAICA", "GSL CHRISTEN", "GSL NICOLETTA", "GSL VALERIE", "JULIE", "KUMASI", "MANET"],
+    "Fleet 11": ["ATHENA", "EPAMINONDAS", "IAN H", "MARIANNA I", "MSC ROMA", "TINA I"],
+    "Fleet 12": ["GSL DOROTHEA", "GSL KITHIRA", "GSL MARIA", "GSL MELITA", "GSL SYROS", "GSL TEGEA", "GSL TINOS", "GSL TRIPOLI"],
+    "Fleet 14": ["GSL CHLOE", "GSL ELIZABETH", "GSL MAMITSA", "GSL MERCER", "GSL ROSSI", "GSL SUSAN", "TONSBERG"],
+    "Fleet 15": ["GSL ALEXANDRA", "GSL ARCADIA", "GSL EFFIE", "GSL LYDIA", "GSL MYNY", "GSL SOFIA", "GSL VIOLETTA", "KOSTAS K", "MARIA Y"],
+}
+
+VESSEL_OPTIONS = sorted({vessel for vessels in VESSEL_GROUPS.values() for vessel in vessels})
+VESSEL_QUERY_CHUNK_SIZE = 3
+
 COLUMN_ALIASES = {
     "Diesel Generators - HSHFO": "Diesel Generator - HSHFO",
     "Diesel Generators - HSLFO": "Diesel Generator - HSLFO",
@@ -437,7 +453,9 @@ def render_app_header() -> None:
     st.markdown(
         """
         <div class="app-header">
+            <div class="app-eyebrow">Marorka performance monitoring</div>
             <h1>Fleet Performance Dashboard</h1>
+            <div class="app-subtitle">Selected vessel analysis | live API snapshot | Power Query aligned calculations</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -557,6 +575,20 @@ def build_report_type_filter(report_types: list[str]) -> str:
     return " ".join(f"and ReportType ne '{escape_odata_text(report_type)}'" for report_type in report_types)
 
 
+def build_ship_filter(ship_names: str | list[str]) -> str:
+    if isinstance(ship_names, str):
+        names = [ship_names.strip()] if ship_names.strip() else []
+    else:
+        names = [str(name).strip() for name in ship_names if str(name).strip()]
+
+    names = unique_preserve_order(names)
+    if not names:
+        return ""
+    if len(names) == 1:
+        return f"ShipName eq '{escape_odata_text(names[0])}'"
+    return "(" + " or ".join(f"ShipName eq '{escape_odata_text(name)}'" for name in names) + ")"
+
+
 def build_query_params(
     start_date_value: date,
     end_date_value: date,
@@ -565,7 +597,7 @@ def build_query_params(
     include_date_filter: bool,
     include_value_filter: bool,
     date_literal_format: str,
-    ship_name: str = "",
+    ship_name: str | list[str] = "",
     date_operator: str = "ge",
     order_by_start_desc: bool = False,
     top_limit: int | None = None,
@@ -574,8 +606,9 @@ def build_query_params(
     end_exclusive_datetime = (end_date_value + timedelta(days=1)).strftime(date_literal_format)
     filters = ["ValueDescription ne null"]
 
-    if ship_name.strip():
-        filters.insert(0, f"ShipName eq '{escape_odata_text(ship_name.strip())}'")
+    ship_filter = build_ship_filter(ship_name)
+    if ship_filter:
+        filters.insert(0, ship_filter)
 
     if include_date_filter:
         filters.append(f"StartDateTimeGMT {date_operator} DateTime'{start_datetime}'")
@@ -655,7 +688,7 @@ def build_parameter_sets(
     end_date_value: date,
     values: list[str],
     date_literal_format: str,
-    ship_name: str,
+    ship_name: str | list[str],
     query_mode: str = "Dashboard metric pull",
 ) -> list[dict[str, str]]:
     if query_mode == "Connection test":
@@ -702,6 +735,7 @@ def build_parameter_sets(
             for chunk_start, chunk_end in date_chunks(start_date_value, end_date_value)
         ]
 
+    ship_name_chunks = chunks(ship_name, VESSEL_QUERY_CHUNK_SIZE) if isinstance(ship_name, list) else [ship_name]
     return [
         build_query_params(
             chunk_start,
@@ -710,9 +744,10 @@ def build_parameter_sets(
             include_date_filter=True,
             include_value_filter=True,
             date_literal_format=date_literal_format,
-            ship_name=ship_name,
+            ship_name=ship_name_chunk,
             order_by_start_desc=True,
         )
+        for ship_name_chunk in ship_name_chunks
         for chunk_start, chunk_end in date_chunks(start_date_value, end_date_value)
         for value_chunk in chunks(values, METRIC_QUERY_CHUNK_SIZE)
     ]
@@ -1820,35 +1855,53 @@ def main() -> None:
             fetch_all_data.clear()
             transform_report_data.clear()
 
-        api_ship_name = st.text_input(
-            "Vessel to load",
-            value=st.session_state.get("api_ship_name_input", ""),
-            key="api_ship_name_input",
-            help="Type the vessel name exactly as it appears in Marorka, e.g. Ateti.",
-        ).strip()
+        selected_group = st.selectbox(
+            "Vessel group",
+            options=["Single vessel"] + list(VESSEL_GROUPS.keys()),
+            key="api_vessel_group_select",
+        )
 
+        if selected_group == "Single vessel":
+            single_vessel = st.selectbox(
+                "Vessel to load",
+                options=[""] + VESSEL_OPTIONS,
+                key="api_ship_name_select",
+            )
+            api_selected_vessels = [single_vessel] if single_vessel else []
+        else:
+            api_selected_vessels = st.multiselect(
+                "Vessels to load",
+                options=VESSEL_GROUPS[selected_group],
+                default=VESSEL_GROUPS[selected_group],
+                key="api_vessels_multiselect",
+            )
+
+        api_ship_name = ", ".join(api_selected_vessels)
         selected_values = DEFAULT_VALUES
-        st.caption(f"Dashboard will load {len(selected_values):,} required API variables.")
-        load_fetch = st.button("Load dashboard data", type="primary", use_container_width=True, disabled=not bool(api_ship_name))
+        st.caption(
+            f"Dashboard will load {len(selected_values):,} required API variables for "
+            f"{len(api_selected_vessels):,} vessel(s)."
+        )
+        load_fetch = st.button("Load dashboard data", type="primary", use_container_width=True, disabled=not bool(api_selected_vessels))
 
     active_request = {
         "start_date": start_date_input.isoformat(),
         "end_date": end_date_input.isoformat(),
-        "ship_name": api_ship_name,
+        "vessels": "|".join(api_selected_vessels),
         "values_signature": sha256("|".join(selected_values).encode("utf-8")).hexdigest(),
     }
 
     if load_fetch:
-        if not api_ship_name:
-            st.warning("Select a vessel before loading dashboard data.")
+        if not api_selected_vessels:
+            st.warning("Select at least one vessel before loading dashboard data.")
             st.stop()
         st.session_state.active_api_request = active_request
 
-    if refresh_api and api_ship_name:
+    if refresh_api and api_selected_vessels:
         st.session_state.active_api_request = active_request
 
-    if not api_ship_name:
-        st.info("Select a date range and vessel, then click Load dashboard data.")
+    if not api_selected_vessels:
+        st.info("Select a date range and at least one vessel, then click Load dashboard data.")
         st.stop()
 
     if st.session_state.get("active_api_request") != active_request:
@@ -1860,7 +1913,7 @@ def main() -> None:
         end_date_input,
         selected_values,
         DATE_LITERAL_FORMATS[date_format_label],
-        api_ship_name,
+        api_selected_vessels,
         query_mode=query_mode,
     )
 
