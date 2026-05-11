@@ -17,15 +17,17 @@ from urllib3.util.retry import Retry
 APP_TITLE = "Magic Noon alla Mantalos"
 BASE_URL = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 DEFAULT_DAYS_BACK = 30
-DEFAULT_START_DATE = "01-01-2026"
+DEFAULT_START_DATE = "2026-01-01"
 PAGE_SAFETY_LIMIT = 2000
 SAMPLE_ROW_LIMIT = 100
 METRIC_QUERY_CHUNK_SIZE = 8
 
 DATE_LITERAL_FORMATS = {
-    "Date only": "%d-%m-%Y",
-    "Date and time": "%d-%m-%YT00:00:00",
+    "Date only": "%Y-%m-%d",
+    "Date and time": "%Y-%m-%dT00:00:00",
 }
+UI_DATE_INPUT_FORMAT = "DD/MM/YYYY"
+DISPLAY_DATETIME_FORMAT = "%d/%m/%Y %H:%M"
 
 REPORT_TYPES_TO_EXCLUDE = [
     "Intake Report",
@@ -1223,7 +1225,7 @@ def format_value(value: object) -> str:
 def format_datetime(value: object) -> str:
     if pd.isna(value):
         return "-"
-    return pd.Timestamp(value).strftime("%Y-%m-%d %H:%M")
+    return pd.Timestamp(value).strftime(DISPLAY_DATETIME_FORMAT)
 
 
 def numeric_delta(current_value: object, previous_value: object) -> str | None:
@@ -1355,8 +1357,8 @@ def render_api_test(
         max_date = pivot_df["EndDateTimeGMT"].max()
         if pd.notna(min_date) and pd.notna(max_date):
             st.caption(
-                f"Loaded report window: {min_date:%Y-%m-%d %H:%M} "
-                f"to {max_date:%Y-%m-%d %H:%M} GMT"
+                f"Loaded report window: {min_date.strftime(DISPLAY_DATETIME_FORMAT)} "
+                f"to {max_date.strftime(DISPLAY_DATETIME_FORMAT)} GMT"
             )
 
     with st.expander("Exact API request settings", expanded=False):
@@ -1882,7 +1884,7 @@ def format_report_table_for_display(table_df: pd.DataFrame) -> pd.DataFrame:
     for column in display_df.columns:
         if pd.api.types.is_datetime64_any_dtype(display_df[column]):
             display_df[column] = pd.to_datetime(display_df[column], errors="coerce").dt.strftime(
-                "%d-%m-%Y %H:%M"
+                DISPLAY_DATETIME_FORMAT
             )
 
     for column in percentage_columns:
@@ -2001,8 +2003,16 @@ with st.sidebar:
     page_safety_limit = get_int_secret("MARORKA_PAGE_SAFETY_LIMIT", PAGE_SAFETY_LIMIT)
 
     st.header("Data Window")
-    start_date_input = st.date_input("Start date", value=get_default_start_date())
-    end_date_input = st.date_input("End date", value=date.today())
+    start_date_input = st.date_input(
+        "Start date",
+        value=get_default_start_date(),
+        format=UI_DATE_INPUT_FORMAT,
+    )
+    end_date_input = st.date_input(
+        "End date",
+        value=date.today(),
+        format=UI_DATE_INPUT_FORMAT,
+    )
 
     if end_date_input < start_date_input:
         st.warning("End date must be on or after start date.")
@@ -2205,6 +2215,7 @@ with st.sidebar:
         boiler_date_range = st.date_input(
             "Boiler date range",
             value=(loaded_start_date, loaded_end_date),
+            format=UI_DATE_INPUT_FORMAT,
             key="filter_boiler_date_range",
         )
         if isinstance(boiler_date_range, tuple) and len(boiler_date_range) == 2:
