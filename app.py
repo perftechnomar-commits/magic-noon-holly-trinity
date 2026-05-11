@@ -650,9 +650,11 @@ def build_query_params(
     # the full ValueDescription list or ReportType filters are pushed server-side.
     # Those filters are applied locally in filter_report_rows_locally().
 
+    # Do not use $select for ReportData. The original working Power Query did not
+    # push $select, and Marorka can return HTTP 500 on ReportData when $select is
+    # combined with date/vessel filters. Fetch the full row, then reduce locally.
     params = {
         "$format": "json",
-        "$select": ",".join(INDEX_COLUMNS + ["ValueDescription", "ReportedValue"]),
     }
     if filters:
         params["$filter"] = " and ".join(filters)
