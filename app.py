@@ -1882,7 +1882,7 @@ def format_report_table_for_display(table_df: pd.DataFrame) -> pd.DataFrame:
     for column in display_df.columns:
         if pd.api.types.is_datetime64_any_dtype(display_df[column]):
             display_df[column] = pd.to_datetime(display_df[column], errors="coerce").dt.strftime(
-                "%Y-%m-%d %H:%M"
+                "%d-%m-%Y %H:%M"
             )
 
     for column in percentage_columns:
