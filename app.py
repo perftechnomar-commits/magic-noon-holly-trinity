@@ -745,7 +745,7 @@ def build_parameter_sets(
             include_value_filter=True,
             date_literal_format=date_literal_format,
             ship_name=ship_name_chunk,
-            order_by_start_desc=True,
+            order_by_start_desc=False,
         )
         for ship_name_chunk in ship_name_chunks
         for chunk_start, chunk_end in date_chunks(start_date_value, end_date_value)
