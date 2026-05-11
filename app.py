@@ -2121,4 +2121,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        import traceback
+        st.error("App crashed during startup.")
+        st.code(traceback.format_exc())
+        raise exc
