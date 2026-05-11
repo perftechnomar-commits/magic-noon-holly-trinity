@@ -48,22 +48,13 @@ INDEX_COLUMNS = [
 ]
 
 VESSEL_DISCOVERY_VALUES = [
-    "Steaming Time Since Last Report [hh:mm]",
-    "Draft Forward [m] (m)",
-    "Draft Aft [m] (m)",
     "Engine Distance [nm]",
-    "Shaft 1 RPM (rpm)",
 ]
 
 DEFAULT_VALUES = [
-    # Calculated Slip
     "Engine Distance [nm]",
     "Distance Over Ground [nm]",
-
-    # ME Load [%MCR]
     "ME Load [%MCR]",
-
-    # SFOC [gr/Kwh]
     "Power from Torque Meter [kW]",
     "Main Engine - HSHFO",
     "Main Engine - HSLFO",
@@ -72,8 +63,6 @@ DEFAULT_VALUES = [
     "Main Engine - ULSLFO",
     "Main Engine - VLSHFO",
     "Main Engine - VLSLFO",
-
-    # Boiler Sum
     "Boiler - HSHFO",
     "Boiler - HSLFO",
     "Boiler - MGO",
@@ -461,6 +450,20 @@ def get_int_secret(name: str, default: int) -> int:
         return default
 
 
+def get_default_start_date() -> date:
+    configured_start_date = get_secret("MARORKA_START_DATE")
+    if configured_start_date:
+        parsed = pd.to_datetime(configured_start_date, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.date()
+
+    configured_days_back = get_int_secret("MARORKA_DAYS_BACK", DEFAULT_DAYS_BACK)
+    if configured_days_back > 0:
+        return date.today() - timedelta(days=configured_days_back)
+
+    return pd.to_datetime(DEFAULT_START_DATE).date()
+
+
 def default_report_window(today: date | None = None) -> tuple[date, date]:
     today = today or date.today()
 
@@ -478,20 +481,6 @@ def default_report_window(today: date | None = None) -> tuple[date, date]:
         end_date = date(today.year, today.month + 1, 1) - timedelta(days=1)
 
     return start_date, end_date
-
-
-def get_default_start_date() -> date:
-    configured_start_date = get_secret("MARORKA_START_DATE")
-    if configured_start_date:
-        parsed = pd.to_datetime(configured_start_date, errors="coerce")
-        if pd.notna(parsed):
-            return parsed.date()
-
-    configured_days_back = get_int_secret("MARORKA_DAYS_BACK", DEFAULT_DAYS_BACK)
-    if configured_days_back > 0:
-        return date.today() - timedelta(days=configured_days_back)
-
-    return pd.to_datetime(DEFAULT_START_DATE).date()
 
 
 def require_dashboard_password() -> bool:
@@ -601,7 +590,8 @@ def build_query_params(
 
 
 def build_vessel_query_params(start_date_value: date, end_date_value: date, date_literal_format: str) -> dict[str, str]:
-    start_datetime = start_date_value.strftime(date_literal_format)
+    lookup_start_date = max(start_date_value, end_date_value - timedelta(days=14))
+    start_datetime = lookup_start_date.strftime(date_literal_format)
     end_exclusive_datetime = (end_date_value + timedelta(days=1)).strftime(date_literal_format)
     filters = [
         "ValueDescription ne null",
