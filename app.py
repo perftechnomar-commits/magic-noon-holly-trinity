@@ -84,13 +84,13 @@ DEFAULT_VALUES = [
 ]
 
 VESSEL_GROUPS = {
-    "Fleet 1": ["ATETI", "CMA CGM THALASSA", "CZECH", "DOLPHIN II", "GSL CHRISTEL ELISABETH", "GSL VINIA", "MYNY", "SYDNEY EXPRESS"],
+    "Fleet 1": ["Ateti", "CMA CGM THALASSA", "CZECH", "DOLPHIN II", "GSL CHRISTEL ELISABETH", "GSL VINIA", "MYNY", "SYDNEY EXPRESS"],
     "Fleet 2": ["AGIOS DIMITRIOS", "ELENI T", "MAIRA", "MELINA", "NEWYORKER", "NIKOLAS", "TORRANCE"],
     "Fleet 3": ["BREMERHAVEN EXPRESS", "CMA CGM ALCAZAR", "GSL ALICE", "GSL CHATEAU D'IF", "GSL ELEFTHERIA", "GSL MAREN", "GSL MELINA", "ISTANBUL EXPRESS"],
     "Fleet 4": ["ANTHEA Y", "COLOMBIA EXPRESS", "COSTA RICA EXPRESS", "JAMAICA EXPRESS", "MEXICO EXPRESS", "NICARAGUA EXPRESS", "PANAMA EXPRESS", "ZIM NORFOLK", "ZIM XIAMEN"],
     "Fleet 9": ["CMA CGM AMERICA", "CMA CGM SAMBHAR", "GSL ELENI", "GSL GRANIA", "GSL KALLIOPI", "GSL NINGBO", "MSC QINGDAO", "MSC TIANJIN"],
     "Fleet 10": ["CAPTAIN THANASIS I", "CMA CGM JAMAICA", "GSL CHRISTEN", "GSL NICOLETTA", "GSL VALERIE", "JULIE", "KUMASI", "MANET"],
-    "Fleet 11": ["ATHENA", "EPAMINONDAS", "IAN H", "MARIANNA I", "MSC ROMA", "TINA I"],
+    "Fleet 11": ["Athena", "EPAMINONDAS", "IAN H", "MARIANNA I", "MSC ROMA", "TINA I"],
     "Fleet 12": ["GSL DOROTHEA", "GSL KITHIRA", "GSL MARIA", "GSL MELITA", "GSL SYROS", "GSL TEGEA", "GSL TINOS", "GSL TRIPOLI"],
     "Fleet 14": ["GSL CHLOE", "GSL ELIZABETH", "GSL MAMITSA", "GSL MERCER", "GSL ROSSI", "GSL SUSAN", "TONSBERG"],
     "Fleet 15": ["GSL ALEXANDRA", "GSL ARCADIA", "GSL EFFIE", "GSL LYDIA", "GSL MYNY", "GSL SOFIA", "GSL VIOLETTA", "KOSTAS K", "MARIA Y"],
@@ -626,13 +626,17 @@ def build_query_params(
     include_value_filter: bool,
     date_literal_format: str,
     ship_name: str | list[str] = "",
-    date_operator: str = "ge",
+    date_operator: str = "gt",
     order_by_start_desc: bool = False,
     top_limit: int | None = None,
 ) -> dict[str, str]:
     start_datetime = start_date_value.strftime(date_literal_format)
     end_exclusive_datetime = (end_date_value + timedelta(days=1)).strftime(date_literal_format)
-    filters: list[str] = []
+    # Keep this lightweight server-side filter. It matches the safe part of the
+    # original Power Query logic and avoids returning null ValueDescription rows.
+    # Do not push the long ValueDescription list or ReportType exclusions here;
+    # those are applied locally in filter_report_rows_locally().
+    filters: list[str] = ["ValueDescription ne null"]
 
     ship_filter = build_ship_filter(ship_name)
     if ship_filter:
@@ -643,8 +647,8 @@ def build_query_params(
         filters.append(f"StartDateTimeGMT lt DateTime'{end_exclusive_datetime}'")
 
     # Keep the API filter simple. Marorka ReportData can return HTTP 500 when
-    # ValueDescription / ReportType filters are pushed server-side.
-    # These filters are applied locally in filter_report_rows_locally().
+    # the full ValueDescription list or ReportType filters are pushed server-side.
+    # Those filters are applied locally in filter_report_rows_locally().
 
     params = {
         "$format": "json",
