@@ -2017,9 +2017,11 @@ with st.sidebar:
 
     auth_signature = sha256(f"{username}:{password}".encode("utf-8")).hexdigest()
 
-    refresh_vessels = st.button("Refresh vessel list", use_container_width=True)
-    if refresh_vessels:
+    refresh_api = st.button("Refresh API data", use_container_width=True)
+    if refresh_api:
         fetch_vessel_options.clear()
+        fetch_all_data.clear()
+        transform_report_data.clear()
 
     vessel_query_params = build_vessel_query_params(
         start_date_input,
@@ -2066,11 +2068,6 @@ with st.sidebar:
         use_container_width=True,
         disabled=not bool(api_ship_name),
     )
-    refresh_fetch = st.button(
-        "Reload selected data",
-        use_container_width=True,
-        disabled=not bool(api_ship_name),
-    )
 
 active_request = {
     "start_date": start_date_input.isoformat(),
@@ -2078,15 +2075,14 @@ active_request = {
     "ship_name": api_ship_name,
 }
 
-if load_fetch or refresh_fetch:
+if load_fetch:
     if not api_ship_name:
         st.warning("Select a vessel before loading dashboard data.")
         st.stop()
     st.session_state.active_api_request = active_request
 
-if refresh_fetch:
-    fetch_all_data.clear()
-    transform_report_data.clear()
+if refresh_api and api_ship_name:
+    st.session_state.active_api_request = active_request
 
 if not api_ship_name:
     st.info("Select a date range and vessel, then click Load dashboard data.")
