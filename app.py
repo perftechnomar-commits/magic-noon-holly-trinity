@@ -555,7 +555,9 @@ def match_selected_vessels(raw_ship_names: pd.Series, selected_vessels: list[str
 
 
 def safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
-    denominator = denominator.replace(0, pd.NA)
+    numerator = pd.to_numeric(numerator, errors="coerce")
+    denominator = pd.to_numeric(denominator, errors="coerce")
+    denominator = denominator.mask(denominator == 0)
     return numerator / denominator
 
 
