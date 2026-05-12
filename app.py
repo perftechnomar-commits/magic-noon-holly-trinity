@@ -135,6 +135,41 @@ VESSEL_GROUPS = {
 
 VESSEL_OPTIONS = sorted({v for vessels in VESSEL_GROUPS.values() for v in vessels})
 
+# Default KPI filters matching the Power Query reporting logic.
+# These are applied on first load only; if the user edits them, their choices
+# stay in session_state across API refreshes, vessel changes, and date changes.
+DEFAULT_PERFORMANCE_FILTER_COLUMNS = [
+    "StateName",
+    "Steaming Time Since Last Report [hh:mm]",
+    "ME Load [%MCR]",
+    "Calculated Slip",
+    "SFOC [gr/Kwh]",
+]
+
+DEFAULT_BOILER_FILTER_COLUMNS = [
+    "StateName",
+    "Steaming Time Since Last Report [hh:mm]",
+]
+
+DEFAULT_PERFORMANCE_NUMERIC_FILTERS = {
+    "Steaming Time Since Last Report [hh:mm]": {"min": "5", "max": "", "min_op": ">", "max_op": "<="},
+    "ME Load [%MCR]": {"min": "0.10", "max": "1", "min_op": ">", "max_op": "<="},
+    "Calculated Slip": {"min": "-0.15", "max": "0.35", "min_op": ">=", "max_op": "<="},
+    "SFOC [gr/Kwh]": {"min": "150", "max": "250", "min_op": ">=", "max_op": "<="},
+}
+
+DEFAULT_BOILER_NUMERIC_FILTERS = {
+    "Steaming Time Since Last Report [hh:mm]": {"min": "5", "max": "", "min_op": ">", "max_op": "<="},
+}
+
+DEFAULT_PERFORMANCE_CATEGORICAL_FILTERS = {
+    "StateName": ["Sea Passage"],
+}
+
+DEFAULT_BOILER_CATEGORICAL_FILTERS = {
+    "StateName": ["Sea Passage"],
+}
+
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 
@@ -826,12 +861,52 @@ def is_numeric_like(series: pd.Series) -> bool:
     return values.notna().any()
 
 
+def filter_digest(column: str) -> str:
+    return sha256(column.encode("utf-8")).hexdigest()[:10]
+
+
+def seed_filter_defaults(
+    *,
+    key_prefix: str,
+    default_columns: list[str] | None = None,
+    default_numeric_filters: dict[str, dict[str, str]] | None = None,
+    default_categorical_filters: dict[str, list[str]] | None = None,
+) -> None:
+    selected_key = f"{key_prefix}_columns"
+    if selected_key not in st.session_state and default_columns:
+        st.session_state[selected_key] = list(default_columns)
+
+    for column, bounds in (default_numeric_filters or {}).items():
+        digest = filter_digest(column)
+        min_key = f"{key_prefix}_{digest}_min"
+        max_key = f"{key_prefix}_{digest}_max"
+        if min_key not in st.session_state:
+            st.session_state[min_key] = bounds.get("min", "")
+        if max_key not in st.session_state:
+            st.session_state[max_key] = bounds.get("max", "")
+
+    for column, values in (default_categorical_filters or {}).items():
+        value_key = f"{key_prefix}_{filter_digest(column)}_values"
+        if value_key not in st.session_state:
+            st.session_state[value_key] = list(values)
+
+
 def render_excel_like_filters(
     df: pd.DataFrame,
     *,
     key_prefix: str,
     label: str,
+    default_columns: list[str] | None = None,
+    default_numeric_filters: dict[str, dict[str, str]] | None = None,
+    default_categorical_filters: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
+    seed_filter_defaults(
+        key_prefix=key_prefix,
+        default_columns=default_columns,
+        default_numeric_filters=default_numeric_filters,
+        default_categorical_filters=default_categorical_filters,
+    )
+
     current_options = filterable_columns(df)
     selected_key = f"{key_prefix}_columns"
     previous_columns = st.session_state.get(selected_key, [])
@@ -849,7 +924,6 @@ def render_excel_like_filters(
     selected_columns = st.multiselect(
         label,
         options=options,
-        default=[],
         key=selected_key,
         help="Choose columns to filter. Numeric columns use Min/Max text boxes; text columns use value selection.",
     )
@@ -864,8 +938,9 @@ def render_excel_like_filters(
         series = df[column]
 
         if pd.api.types.is_datetime64_any_dtype(series):
-            from_key = f"{key_prefix}_{sha256(column.encode('utf-8')).hexdigest()[:10]}_from"
-            to_key = f"{key_prefix}_{sha256(column.encode('utf-8')).hexdigest()[:10]}_to"
+            digest = filter_digest(column)
+            from_key = f"{key_prefix}_{digest}_from"
+            to_key = f"{key_prefix}_{digest}_to"
             left, right = st.columns(2)
             from_text = left.text_input("From", key=from_key, placeholder="dd/mm/yyyy")
             to_text = right.text_input("To", key=to_key, placeholder="dd/mm/yyyy")
@@ -880,9 +955,12 @@ def render_excel_like_filters(
             values = pd.to_numeric(series, errors="coerce").dropna()
             if not values.empty:
                 st.caption(f"Loaded range: {format_value(values.min(), 3)} to {format_value(values.max(), 3)}")
-            digest = sha256(column.encode("utf-8")).hexdigest()[:10]
+            digest = filter_digest(column)
             min_key = f"{key_prefix}_{digest}_min"
             max_key = f"{key_prefix}_{digest}_max"
+            default_rule = (default_numeric_filters or {}).get(column, {})
+            min_op = default_rule.get("min_op", ">=")
+            max_op = default_rule.get("max_op", "<=")
             left, right = st.columns(2)
             min_text = left.text_input("Min", key=min_key, placeholder="no minimum")
             max_text = right.text_input("Max", key=max_key, placeholder="no maximum")
@@ -892,10 +970,18 @@ def render_excel_like_filters(
                 st.warning(f"{column}: enter numeric Min/Max values only.")
             if minimum is not None and maximum is not None and minimum > maximum:
                 minimum, maximum = maximum, minimum
-            specs.append({"column": column, "kind": "numeric", "min": minimum, "max": maximum})
+                min_op, max_op = ">=", "<="
+            specs.append({
+                "column": column,
+                "kind": "numeric",
+                "min": minimum,
+                "max": maximum,
+                "min_op": min_op,
+                "max_op": max_op,
+            })
             continue
 
-        value_key = f"{key_prefix}_{sha256(column.encode('utf-8')).hexdigest()[:10]}_values"
+        value_key = f"{key_prefix}_{filter_digest(column)}_values"
         previous_values = st.session_state.get(value_key, [])
         if not isinstance(previous_values, list):
             previous_values = []
@@ -906,7 +992,6 @@ def render_excel_like_filters(
         selected_values = st.multiselect(
             "Values",
             options=value_options,
-            default=[],
             key=value_key,
             help="Leave blank to include all values for this column.",
         )
@@ -928,11 +1013,19 @@ def apply_excel_like_filters(df: pd.DataFrame, specs: list[dict[str, Any]]) -> p
             values = pd.to_numeric(filtered[column], errors="coerce")
             minimum = spec.get("min")
             maximum = spec.get("max")
+            min_op = spec.get("min_op", ">=")
+            max_op = spec.get("max_op", "<=")
             if minimum is not None:
-                filtered = filtered[values >= minimum]
+                if min_op == ">":
+                    filtered = filtered[values > minimum]
+                else:
+                    filtered = filtered[values >= minimum]
                 values = pd.to_numeric(filtered[column], errors="coerce")
             if maximum is not None:
-                filtered = filtered[values <= maximum]
+                if max_op == "<":
+                    filtered = filtered[values < maximum]
+                else:
+                    filtered = filtered[values <= maximum]
 
         elif kind == "datetime":
             values = pd.to_datetime(filtered[column], errors="coerce", utc=True)
@@ -964,22 +1057,30 @@ def selected_vessel_controls() -> tuple[str, list[str]]:
     selected_group = st.sidebar.selectbox("Fleet group", options=group_options)
 
     if selected_group == "Single vessel":
-        vessel = st.sidebar.selectbox("Vessel to load", options=VESSEL_OPTIONS)
+        vessel = st.sidebar.selectbox("Vessel to include", options=VESSEL_OPTIONS)
         return selected_group, [vessel]
 
     if selected_group == "All fleets":
-        vessels = st.sidebar.multiselect(
-            "Vessels to load",
-            options=VESSEL_OPTIONS,
-            default=VESSEL_OPTIONS,
-        )
-        return selected_group, vessels
+        group_vessels = VESSEL_OPTIONS
+    else:
+        group_vessels = VESSEL_GROUPS[selected_group]
 
     vessels = st.sidebar.multiselect(
-        "Vessels to load",
-        options=VESSEL_GROUPS[selected_group],
-        default=VESSEL_GROUPS[selected_group],
+        "Vessels to include",
+        options=group_vessels,
+        default=group_vessels,
+        help=(
+            "This controls the dashboard display and KPI calculations only. "
+            "The API data has already been loaded broadly for the selected date window."
+        ),
     )
+
+    if not vessels:
+        st.sidebar.caption(
+            "No vessels selected manually, so all vessels in this fleet group are included."
+        )
+        vessels = group_vessels
+
     return selected_group, vessels
 
 
@@ -995,9 +1096,6 @@ def sidebar_controls() -> tuple[date, date, str, list[str], bool]:
 
     st.sidebar.header("Fleet Selection")
     group, vessels = selected_vessel_controls()
-    if not vessels:
-        st.sidebar.warning("Select at least one vessel.")
-        st.stop()
 
     refresh = st.sidebar.button("Load / Refresh API data", use_container_width=True)
     return start_date, end_date, group, vessels, refresh
@@ -1179,6 +1277,9 @@ def main() -> None:
             df,
             key_prefix="performance_kpi_filter",
             label="Columns to filter",
+            default_columns=DEFAULT_PERFORMANCE_FILTER_COLUMNS,
+            default_numeric_filters=DEFAULT_PERFORMANCE_NUMERIC_FILTERS,
+            default_categorical_filters=DEFAULT_PERFORMANCE_CATEGORICAL_FILTERS,
         )
 
     with st.sidebar.expander("KPI Filters: Boiler Sum", expanded=False):
@@ -1187,6 +1288,9 @@ def main() -> None:
             df,
             key_prefix="boiler_kpi_filter",
             label="Columns to filter",
+            default_columns=DEFAULT_BOILER_FILTER_COLUMNS,
+            default_numeric_filters=DEFAULT_BOILER_NUMERIC_FILTERS,
+            default_categorical_filters=DEFAULT_BOILER_CATEGORICAL_FILTERS,
         )
 
     performance_kpi_df = apply_excel_like_filters(df, performance_filter_specs)
