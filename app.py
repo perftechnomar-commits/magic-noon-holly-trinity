@@ -218,9 +218,16 @@ def apply_custom_css() -> None:
         }
 
         header[data-testid="stHeader"] {
-            background: linear-gradient(180deg, rgba(5, 5, 5, 0.82), rgba(5, 5, 5, 0.34)) !important;
-            border-bottom: 1px solid rgba(245, 200, 75, 0.14) !important;
-            backdrop-filter: blur(18px);
+            background: transparent !important;
+            border-bottom: 0 !important;
+            box-shadow: none !important;
+            backdrop-filter: none;
+        }
+
+        header[data-testid="stHeader"] > div {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
         }
 
         div[data-testid="stToolbar"] {
@@ -228,18 +235,19 @@ def apply_custom_css() -> None:
         }
 
         div[data-testid="stDecoration"] {
-            background: linear-gradient(90deg, rgba(255, 216, 74, 0.45), rgba(255, 176, 0, 0.16)) !important;
-            height: 2px !important;
+            background: transparent !important;
+            height: 0 !important;
         }
 
         div[data-testid="stAlert"] {
-            background:
-                linear-gradient(135deg, rgba(23, 20, 10, 0.84), rgba(8, 8, 5, 0.70)) !important;
-            border: 1px solid rgba(255, 216, 74, 0.30) !important;
-            border-radius: 14px !important;
-            box-shadow: 0 14px 34px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,216,74,0.12);
-            color: #F5EFD8 !important;
-            backdrop-filter: blur(12px);
+            background: transparent !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            color: #FFFBEA !important;
+            backdrop-filter: none;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
         }
 
         div[data-testid="stAlert"] svg {
@@ -249,7 +257,9 @@ def apply_custom_css() -> None:
 
         div[data-testid="stAlert"] div,
         div[data-testid="stAlert"] p {
-            color: #F5EFD8 !important;
+            color: #FFFBEA !important;
+            font-weight: 700 !important;
+            text-shadow: 0 2px 12px rgba(0,0,0,0.92);
         }
 
         .block-container {
