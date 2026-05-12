@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from hashlib import sha256
 from html import escape
 from io import BytesIO
 import hmac
@@ -729,12 +730,23 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
-def render_kpis(df: pd.DataFrame) -> None:
-    latest_value = df["EndDateTimeGMT"].max() if "EndDateTimeGMT" in df.columns and not df.empty else pd.NA
-    slip = pd.to_numeric(df.get("Calculated Slip"), errors="coerce").mean()
-    me_load = pd.to_numeric(df.get("ME Load [%MCR]"), errors="coerce").mean()
-    sfoc = pd.to_numeric(df.get("SFOC [gr/Kwh]"), errors="coerce").replace(0, pd.NA).mean()
-    boiler = pd.to_numeric(df.get("Boiler Sum"), errors="coerce").sum(min_count=1)
+def numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(dtype="float64")
+    return pd.to_numeric(df[column], errors="coerce")
+
+
+def render_kpis(performance_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
+    latest_value = (
+        performance_df["EndDateTimeGMT"].max()
+        if "EndDateTimeGMT" in performance_df.columns and not performance_df.empty
+        else pd.NA
+    )
+
+    slip = numeric_series(performance_df, "Calculated Slip").mean()
+    me_load = numeric_series(performance_df, "ME Load [%MCR]").mean()
+    sfoc = numeric_series(performance_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
+    boiler = numeric_series(boiler_df, "Boiler Sum").sum(min_count=1)
 
     cols = st.columns(4)
     cols[0].metric("Average Calculated Slip", format_percentage(slip))
@@ -742,16 +754,197 @@ def render_kpis(df: pd.DataFrame) -> None:
     cols[2].metric("Average SFOC [gr/Kwh]", format_value(sfoc, 2))
     cols[3].metric("Boiler Sum", format_value(boiler, 2))
 
-    context = st.columns(3)
-    context[0].metric("Reports", f"{df['ReportId'].nunique():,}" if "ReportId" in df else f"{len(df):,}")
-    context[1].metric("Vessels", f"{df['ShipName'].nunique():,}" if "ShipName" in df else "-")
-    context[2].metric("Latest GMT", format_datetime(latest_value))
+    context = st.columns(4)
+    context[0].metric(
+        "Performance KPI reports",
+        f"{performance_df['ReportId'].nunique():,}" if "ReportId" in performance_df else f"{len(performance_df):,}",
+    )
+    context[1].metric(
+        "Performance KPI vessels",
+        f"{performance_df['ShipName'].nunique():,}" if "ShipName" in performance_df else "-",
+    )
+    context[2].metric(
+        "Boiler KPI reports",
+        f"{boiler_df['ReportId'].nunique():,}" if "ReportId" in boiler_df else f"{len(boiler_df):,}",
+    )
+    context[3].metric("Latest GMT", format_datetime(latest_value))
 
 
 def latest_by_vessel(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "ShipName" not in df.columns:
         return df
     return df.sort_values("EndDateTimeGMT").groupby("ShipName", as_index=False, dropna=False).tail(1).sort_values("ShipName")
+
+
+# =============================================================================
+# Excel-like KPI filters
+# =============================================================================
+
+
+def unique_display_values(series: pd.Series, limit: int = 500) -> list[str]:
+    values = series.astype("string").fillna("(Blank)").drop_duplicates().tolist()
+    values = sorted(values, key=lambda value: value.casefold())
+    return values[:limit]
+
+
+def parse_optional_float(value: str) -> tuple[float | None, bool]:
+    text = str(value or "").strip()
+    if not text:
+        return None, True
+    normalized = text.replace(" ", "").replace(",", "")
+    try:
+        return float(normalized), True
+    except ValueError:
+        return None, False
+
+
+def parse_optional_date(value: str) -> tuple[pd.Timestamp | None, bool]:
+    text = str(value or "").strip()
+    if not text:
+        return None, True
+    parsed = pd.to_datetime(text, dayfirst=True, errors="coerce", utc=True)
+    if pd.isna(parsed):
+        return None, False
+    return parsed, True
+
+
+def filterable_columns(df: pd.DataFrame) -> list[str]:
+    preferred = [column for column in DISPLAY_COLUMNS if column in df.columns]
+    remaining = [column for column in df.columns if column not in preferred]
+    return preferred + remaining
+
+
+def is_numeric_like(series: pd.Series) -> bool:
+    values = pd.to_numeric(series, errors="coerce")
+    return values.notna().any()
+
+
+def render_excel_like_filters(
+    df: pd.DataFrame,
+    *,
+    key_prefix: str,
+    label: str,
+) -> list[dict[str, Any]]:
+    current_options = filterable_columns(df)
+    selected_key = f"{key_prefix}_columns"
+    previous_columns = st.session_state.get(selected_key, [])
+    if not isinstance(previous_columns, list):
+        previous_columns = []
+
+    # Keep previously chosen filters available even if the current vessel/date
+    # selection has fewer columns. This makes the filter setup stable across
+    # reruns, vessel changes, and date-window changes.
+    options = []
+    for column in [*previous_columns, *current_options]:
+        if column not in options:
+            options.append(column)
+
+    selected_columns = st.multiselect(
+        label,
+        options=options,
+        default=[],
+        key=selected_key,
+        help="Choose columns to filter. Numeric columns use Min/Max text boxes; text columns use value selection.",
+    )
+
+    specs: list[dict[str, Any]] = []
+    for column in selected_columns:
+        if column not in df.columns:
+            st.caption(f"{column}: retained, but not present in the currently loaded data.")
+            continue
+
+        st.caption(f"Filter: {column}")
+        series = df[column]
+
+        if pd.api.types.is_datetime64_any_dtype(series):
+            from_key = f"{key_prefix}_{sha256(column.encode('utf-8')).hexdigest()[:10]}_from"
+            to_key = f"{key_prefix}_{sha256(column.encode('utf-8')).hexdigest()[:10]}_to"
+            left, right = st.columns(2)
+            from_text = left.text_input("From", key=from_key, placeholder="dd/mm/yyyy")
+            to_text = right.text_input("To", key=to_key, placeholder="dd/mm/yyyy")
+            from_value, from_ok = parse_optional_date(from_text)
+            to_value, to_ok = parse_optional_date(to_text)
+            if not from_ok or not to_ok:
+                st.warning(f"{column}: enter dates as dd/mm/yyyy or yyyy-mm-dd.")
+            specs.append({"column": column, "kind": "datetime", "from": from_value, "to": to_value})
+            continue
+
+        if is_numeric_like(series):
+            values = pd.to_numeric(series, errors="coerce").dropna()
+            if not values.empty:
+                st.caption(f"Loaded range: {format_value(values.min(), 3)} to {format_value(values.max(), 3)}")
+            digest = sha256(column.encode("utf-8")).hexdigest()[:10]
+            min_key = f"{key_prefix}_{digest}_min"
+            max_key = f"{key_prefix}_{digest}_max"
+            left, right = st.columns(2)
+            min_text = left.text_input("Min", key=min_key, placeholder="no minimum")
+            max_text = right.text_input("Max", key=max_key, placeholder="no maximum")
+            minimum, min_ok = parse_optional_float(min_text)
+            maximum, max_ok = parse_optional_float(max_text)
+            if not min_ok or not max_ok:
+                st.warning(f"{column}: enter numeric Min/Max values only.")
+            if minimum is not None and maximum is not None and minimum > maximum:
+                minimum, maximum = maximum, minimum
+            specs.append({"column": column, "kind": "numeric", "min": minimum, "max": maximum})
+            continue
+
+        value_key = f"{key_prefix}_{sha256(column.encode('utf-8')).hexdigest()[:10]}_values"
+        previous_values = st.session_state.get(value_key, [])
+        if not isinstance(previous_values, list):
+            previous_values = []
+        value_options = []
+        for value in [*previous_values, *unique_display_values(series)]:
+            if value not in value_options:
+                value_options.append(value)
+        selected_values = st.multiselect(
+            "Values",
+            options=value_options,
+            default=[],
+            key=value_key,
+            help="Leave blank to include all values for this column.",
+        )
+        specs.append({"column": column, "kind": "categorical", "values": selected_values})
+
+    return specs
+
+
+def apply_excel_like_filters(df: pd.DataFrame, specs: list[dict[str, Any]]) -> pd.DataFrame:
+    filtered = df.copy()
+
+    for spec in specs:
+        column = spec.get("column")
+        if column not in filtered.columns:
+            continue
+
+        kind = spec.get("kind")
+        if kind == "numeric":
+            values = pd.to_numeric(filtered[column], errors="coerce")
+            minimum = spec.get("min")
+            maximum = spec.get("max")
+            if minimum is not None:
+                filtered = filtered[values >= minimum]
+                values = pd.to_numeric(filtered[column], errors="coerce")
+            if maximum is not None:
+                filtered = filtered[values <= maximum]
+
+        elif kind == "datetime":
+            values = pd.to_datetime(filtered[column], errors="coerce", utc=True)
+            from_value = spec.get("from")
+            to_value = spec.get("to")
+            if from_value is not None:
+                filtered = filtered[values >= from_value]
+                values = pd.to_datetime(filtered[column], errors="coerce", utc=True)
+            if to_value is not None:
+                # Include the full selected day.
+                filtered = filtered[values < (to_value + pd.Timedelta(days=1))]
+
+        elif kind == "categorical":
+            selected_values = spec.get("values") or []
+            if selected_values:
+                values = filtered[column].astype("string").fillna("(Blank)")
+                filtered = filtered[values.isin(selected_values)]
+
+    return filtered
 
 
 # =============================================================================
@@ -864,11 +1057,35 @@ def main() -> None:
         st.warning("No matching performance report values were returned for the selected fleet/date window.")
         st.stop()
 
+    with st.sidebar.expander("KPI Filters: Slip / ME Load / SFOC", expanded=False):
+        st.caption("These filters affect only Average Calculated Slip, Average ME Load, and Average SFOC.")
+        performance_filter_specs = render_excel_like_filters(
+            df,
+            key_prefix="performance_kpi_filter",
+            label="Columns to filter",
+        )
+
+    with st.sidebar.expander("KPI Filters: Boiler Sum", expanded=False):
+        st.caption("These filters affect only the Boiler Sum KPI.")
+        boiler_filter_specs = render_excel_like_filters(
+            df,
+            key_prefix="boiler_kpi_filter",
+            label="Columns to filter",
+        )
+
+    performance_kpi_df = apply_excel_like_filters(df, performance_filter_specs)
+    boiler_kpi_df = apply_excel_like_filters(df, boiler_filter_specs)
+
     tab_dashboard, tab_data, tab_diagnostics = st.tabs(["Dashboard", "Data Export", "Diagnostics"])
 
     with tab_dashboard:
         st.markdown('<div class="section-title">Fleet KPIs</div>', unsafe_allow_html=True)
-        render_kpis(df)
+        render_kpis(performance_kpi_df, boiler_kpi_df)
+        if len(performance_kpi_df) != len(df) or len(boiler_kpi_df) != len(df):
+            st.caption(
+                f"Performance KPI filters use {len(performance_kpi_df):,} of {len(df):,} reports. "
+                f"Boiler KPI filters use {len(boiler_kpi_df):,} of {len(df):,} reports."
+            )
 
         st.markdown('<div class="section-title">Latest Report By Vessel</div>', unsafe_allow_html=True)
         st.dataframe(make_display_dataframe(latest_by_vessel(df)), use_container_width=True, hide_index=True)
