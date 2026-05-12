@@ -7,6 +7,7 @@ from io import BytesIO
 import hmac
 import os
 import re
+import time
 from typing import Any
 from urllib.parse import urlencode, urljoin
 
@@ -483,39 +484,44 @@ def fetch_report_data(
     auth_method: str,
     start_date: date,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    started_at = time.perf_counter()
     next_url = build_odata_url(start_date)
     all_rows: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     pages = 0
     total_bytes = 0
     first_url = next_url
+    auth = request_auth(username, password, auth_method)
+    headers = request_headers(token, auth_method)
 
-    for _ in range(MAX_ODATA_PAGES):
-        if next_url in seen_urls:
-            break
-        seen_urls.add(next_url)
+    with requests.Session() as session:
+        session.headers.update(headers)
+        for _ in range(MAX_ODATA_PAGES):
+            if next_url in seen_urls:
+                break
+            seen_urls.add(next_url)
 
-        response = requests.get(
-            next_url,
-            auth=request_auth(username, password, auth_method),
-            headers=request_headers(token, auth_method),
-            timeout=90,
-        )
-        total_bytes += len(response.content)
-        response.raise_for_status()
-        pages += 1
+            response = session.get(
+                next_url,
+                auth=auth,
+                timeout=90,
+            )
+            total_bytes += len(response.content)
+            response.raise_for_status()
+            pages += 1
 
-        page_rows, next_link = extract_odata_page(response.json())
-        all_rows.extend(page_rows)
+            page_rows, next_link = extract_odata_page(response.json())
+            all_rows.extend(page_rows)
 
-        if not next_link:
-            break
-        next_url = urljoin(next_url, next_link)
+            if not next_link:
+                break
+            next_url = urljoin(next_url, next_link)
 
     metadata = {
         "rows": len(all_rows),
         "pages": pages,
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
+        "fetch_seconds": round(time.perf_counter() - started_at, 2),
         "first_url": first_url,
         "hit_page_limit": pages >= MAX_ODATA_PAGES,
     }
@@ -632,25 +638,48 @@ def build_report_rows(df: pd.DataFrame) -> pd.DataFrame:
     if not available_group_keys:
         available_group_keys = ["ShipName", "EndDateTimeGMT"]
 
-    records: list[dict[str, Any]] = []
-    grouped = df.sort_values("_source_order").groupby(available_group_keys, sort=False, dropna=False)
+    sorted_df = df.sort_values("_source_order")
+    base_columns = [
+        column
+        for column in ["ReportType", "StartDateTimeGMT", "LapTime", "StateName"]
+        if column in sorted_df.columns
+    ]
 
-    for keys, group in grouped:
-        key_values = keys if isinstance(keys, tuple) else (keys,)
-        record = dict(zip(available_group_keys, key_values, strict=True))
-        record["ReportType"] = last_non_null(group["ReportType"])
-        record["StartDateTimeGMT"] = last_non_null(group["StartDateTimeGMT"])
-        record["LapTime"] = last_non_null(group["LapTime"])
-        record["StateName"] = last_non_null(group["StateName"]) if "StateName" in group else pd.NA
+    report_df = (
+        sorted_df
+        .groupby(available_group_keys, sort=False, dropna=False)[base_columns]
+        .agg(last_non_null)
+        .reset_index()
+    )
 
-        for column, aliases in VALUE_ALIASES.items():
-            alias_keys = {normalize_text(alias) for alias in aliases}
-            matching_values = group.loc[group["_value_key"].isin(alias_keys), "ParsedValue"]
-            record[column] = last_non_null(matching_values)
+    alias_to_column = {
+        normalize_text(alias): column
+        for column, aliases in VALUE_ALIASES.items()
+        for alias in aliases
+    }
+    value_rows = sorted_df.loc[
+        sorted_df["_value_key"].isin(alias_to_column) & sorted_df["ParsedValue"].notna(),
+        [*available_group_keys, "_value_key", "_source_order", "ParsedValue"],
+    ].copy()
 
-        records.append(record)
+    if not value_rows.empty:
+        value_rows["_canonical_column"] = value_rows["_value_key"].map(alias_to_column)
+        value_rows = value_rows.drop_duplicates(
+            [*available_group_keys, "_canonical_column"],
+            keep="last",
+        )
+        value_table = (
+            value_rows
+            .pivot(index=available_group_keys, columns="_canonical_column", values="ParsedValue")
+            .reset_index()
+        )
+        report_df = report_df.merge(value_table, on=available_group_keys, how="left")
 
-    return pd.DataFrame(records)
+    for column in VALUE_ALIASES:
+        if column not in report_df.columns:
+            report_df[column] = pd.NA
+
+    return report_df
 
 
 def transform_report_data(
@@ -771,6 +800,7 @@ def make_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return display_df.fillna("-")
 
 
+@st.cache_data(show_spinner=False)
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
     output = BytesIO()
     safe_df = df.copy()
@@ -1261,8 +1291,13 @@ def main() -> None:
 
     if df is None or current_transform_sig != transform_sig:
         try:
+            transform_started_at = time.perf_counter()
             df = transform_report_data(raw_df, selected_vessels, start_date, end_date)
             set_loaded_transform_state(df, transform_sig)
+            metadata = st.session_state.get("loaded_metadata")
+            if isinstance(metadata, dict):
+                metadata["transform_seconds"] = round(time.perf_counter() - transform_started_at, 2)
+                st.session_state["loaded_metadata"] = metadata
         except (ValueError, TypeError) as exc:
             st.error(str(exc))
             st.stop()
@@ -1296,9 +1331,13 @@ def main() -> None:
     performance_kpi_df = apply_excel_like_filters(df, performance_filter_specs)
     boiler_kpi_df = apply_excel_like_filters(df, boiler_filter_specs)
 
-    tab_dashboard, tab_data, tab_diagnostics = st.tabs(["Dashboard", "Data Export", "Diagnostics"])
+    selected_view = st.radio(
+        "View",
+        options=["Dashboard", "Data Export", "Diagnostics"],
+        horizontal=True,
+    )
 
-    with tab_dashboard:
+    if selected_view == "Dashboard":
         st.markdown('<div class="section-title">Fleet KPIs</div>', unsafe_allow_html=True)
         render_kpis(performance_kpi_df, boiler_kpi_df)
         if len(performance_kpi_df) != len(df) or len(boiler_kpi_df) != len(df):
@@ -1314,17 +1353,32 @@ def main() -> None:
         display_df = make_display_dataframe(df.sort_values("EndDateTimeGMT", ascending=False))
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-    with tab_data:
+    elif selected_view == "Data Export":
         export_df = df.sort_values(["ShipName", "EndDateTimeGMT"], ascending=[True, False])
-        st.download_button(
-            "Download fleet performance Excel",
-            data=to_excel_bytes(export_df),
-            file_name="fleet_performance_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        export_ready = (
+            st.session_state.get("fleet_export_signature") == transform_sig
+            and "fleet_export_bytes" in st.session_state
         )
+
+        if st.button("Prepare Excel download", type="primary"):
+            with st.spinner("Preparing Excel file..."):
+                st.session_state["fleet_export_bytes"] = to_excel_bytes(export_df)
+                st.session_state["fleet_export_signature"] = transform_sig
+            export_ready = True
+
+        if export_ready:
+            st.download_button(
+                "Download fleet performance Excel",
+                data=st.session_state["fleet_export_bytes"],
+                file_name="fleet_performance_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        else:
+            st.caption("Excel generation is prepared on demand so normal dashboard loads stay faster.")
+
         st.dataframe(make_display_dataframe(export_df), use_container_width=True, hide_index=True)
 
-    with tab_diagnostics:
+    else:
         st.markdown('<div class="section-title">Diagnostics</div>', unsafe_allow_html=True)
         diagnostics = pd.DataFrame(
             {
@@ -1338,6 +1392,8 @@ def main() -> None:
                     "Raw API rows",
                     "API pages",
                     "Downloaded MB",
+                    "API fetch seconds",
+                    "Transform seconds",
                 ],
                 "Value": [
                     ", ".join(selected_vessels),
@@ -1349,6 +1405,8 @@ def main() -> None:
                     f"{metadata['rows']:,}",
                     f"{metadata['pages']:,}",
                     metadata["downloaded_mb"],
+                    metadata.get("fetch_seconds", "-"),
+                    metadata.get("transform_seconds", "-"),
                 ],
             }
         )
@@ -1357,10 +1415,13 @@ def main() -> None:
         with st.expander("First API URL", expanded=False):
             st.code(metadata.get("first_url", "-"), language="text")
 
-        value_counts = raw_df.get("ValueDescription", pd.Series(dtype="object")).value_counts(dropna=False).reset_index()
-        value_counts.columns = ["ValueDescription", "Raw rows"]
         st.markdown('<div class="section-title">Raw ValueDescription Counts</div>', unsafe_allow_html=True)
-        st.dataframe(value_counts.head(200), use_container_width=True, hide_index=True)
+        if st.button("Calculate raw value counts"):
+            value_counts = raw_df.get("ValueDescription", pd.Series(dtype="object")).value_counts(dropna=False).reset_index()
+            value_counts.columns = ["ValueDescription", "Raw rows"]
+            st.dataframe(value_counts.head(200), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Raw value counts are calculated on demand so diagnostics do not slow normal loads.")
 
 
 if __name__ == "__main__":
