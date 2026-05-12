@@ -21,8 +21,8 @@ DEFAULT_DAYS_BACK = 30
 DEFAULT_START_DATE = "2026-01-01"
 PAGE_SAFETY_LIMIT = 2000
 SAMPLE_ROW_LIMIT = 100
-METRIC_QUERY_CHUNK_SIZE = 1
-QUERY_DATE_CHUNK_DAYS = 1
+METRIC_QUERY_CHUNK_SIZE = 6
+QUERY_DATE_CHUNK_DAYS = 7
 
 UI_DATE_INPUT_FORMAT = "DD/MM/YYYY"
 DISPLAY_DATETIME_FORMAT = "%d/%m/%Y %H:%M"
@@ -626,38 +626,34 @@ def build_query_params(
     include_value_filter: bool,
     date_literal_format: str,
     ship_name: str | list[str] = "",
-    date_operator: str = "gt",
+    date_operator: str = "ge",
     order_by_start_desc: bool = False,
     top_limit: int | None = None,
 ) -> dict[str, str]:
     start_datetime = start_date_value.strftime(date_literal_format)
     end_exclusive_datetime = (end_date_value + timedelta(days=1)).strftime(date_literal_format)
-    # Keep this lightweight server-side filter. It matches the safe part of the
-    # original Power Query logic and avoids returning null ValueDescription rows.
-    # Do not push the long ValueDescription list or ReportType exclusions here;
-    # those are applied locally in filter_report_rows_locally().
-    filters: list[str] = ["ValueDescription ne null"]
+    filters = ["ValueDescription ne null"]
 
     ship_filter = build_ship_filter(ship_name)
     if ship_filter:
-        filters.append(ship_filter)
+        filters.insert(0, ship_filter)
 
     if include_date_filter:
         filters.append(f"StartDateTimeGMT {date_operator} DateTime'{start_datetime}'")
         filters.append(f"StartDateTimeGMT lt DateTime'{end_exclusive_datetime}'")
 
-    # Keep the API filter simple. Marorka ReportData can return HTTP 500 when
-    # the full ValueDescription list or ReportType filters are pushed server-side.
-    # Those filters are applied locally in filter_report_rows_locally().
+    report_type_filter = build_report_type_filter(REPORT_TYPES_TO_EXCLUDE)
+    if report_type_filter:
+        filters.append(report_type_filter.removeprefix("and "))
 
-    # Do not use $select for ReportData. The original working Power Query did not
-    # push $select, and Marorka can return HTTP 500 on ReportData when $select is
-    # combined with date/vessel filters. Fetch the full row, then reduce locally.
+    if include_value_filter and values:
+        filters.append(f"({build_value_filter(values)})")
+
     params = {
         "$format": "json",
+        "$select": ",".join(INDEX_COLUMNS + ["ValueDescription", "ReportedValue"]),
+        "$filter": " and ".join(filters),
     }
-    if filters:
-        params["$filter"] = " and ".join(filters)
 
     if top_limit:
         params["$top"] = str(top_limit)
@@ -772,15 +768,16 @@ def build_parameter_sets(
         build_query_params(
             chunk_start,
             chunk_end,
-            None,
+            value_chunk,
             include_date_filter=True,
-            include_value_filter=False,
+            include_value_filter=True,
             date_literal_format=date_literal_format,
             ship_name=ship_name_chunk,
-            order_by_start_desc=False,
+            order_by_start_desc=True,
         )
         for ship_name_chunk in ship_name_chunks
         for chunk_start, chunk_end in date_chunks(start_date_value, end_date_value)
+        for value_chunk in chunks(values, METRIC_QUERY_CHUNK_SIZE)
     ]
 
 
@@ -1250,24 +1247,6 @@ def add_power_query_calculations(df: pd.DataFrame) -> pd.DataFrame:
             result[column] = numeric_column(result, column) / 100
 
     return result
-
-
-def filter_report_rows_locally(df: pd.DataFrame, selected_values: list[str]) -> pd.DataFrame:
-    if df.empty:
-        return df
-
-    filtered = df.copy()
-
-    if "ValueDescription" in filtered.columns and selected_values:
-        filtered = filtered[filtered["ValueDescription"].isin(selected_values)]
-
-    if "ReportType" in filtered.columns:
-        filtered = filtered[~filtered["ReportType"].isin(REPORT_TYPES_TO_EXCLUDE)]
-
-    if "ValueDescription" in filtered.columns:
-        filtered = filtered[filtered["ValueDescription"].notna()]
-
-    return filtered
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1990,7 +1969,6 @@ def main() -> None:
         st.error(f"Could not load Marorka data: {exc}")
         st.stop()
 
-    raw_df = filter_report_rows_locally(raw_df, selected_values)
     raw_df, pivot_df = transform_report_data(raw_df)
 
     if pivot_df.empty:
