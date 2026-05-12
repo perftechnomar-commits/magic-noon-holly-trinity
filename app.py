@@ -20,9 +20,10 @@ from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 # Configuration
 # =============================================================================
 
-APP_TITLE = "Fleet Performance Dashboard"
+APP_TITLE = "Magic Noon alla Mantalos"
 ODATA_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 MAX_ODATA_PAGES = 250
+API_CACHE_TTL_SECONDS = 21600  # 6 hours; KPI filters use local data and do not refetch.
 UI_DATE_INPUT_FORMAT = "DD/MM/YYYY"
 DISPLAY_DATETIME_FORMAT = "%d/%m/%Y %H:%M"
 
@@ -304,7 +305,7 @@ def render_header(selected_group: str, selected_vessels: list[str], start_date: 
         f"""
         <div class="dashboard-hero">
             <div class="eyebrow">Marorka performance monitoring</div>
-            <h1 class="dashboard-title">Fleet Performance Dashboard</h1>
+            <h1 class="dashboard-title">Magic Noon alla Mantalos</h1>
             <div class="dashboard-subtitle">
                 {escape(selected_group)} | {escape(vessel_text)} | {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')} | live API snapshot
             </div>
@@ -344,7 +345,7 @@ def require_dashboard_password() -> None:
         """
         <div class="dashboard-hero">
             <div class="eyebrow">Secure access</div>
-            <h1 class="dashboard-title">Fleet Performance Dashboard</h1>
+            <h1 class="dashboard-title">Magic Noon alla Mantalos</h1>
             <div class="dashboard-subtitle">Enter your dashboard password to continue.</div>
         </div>
         """,
@@ -439,7 +440,7 @@ def rows_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return df
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=API_CACHE_TTL_SECONDS, show_spinner=False)
 def fetch_report_data(
     username: str,
     password: str,
@@ -617,7 +618,6 @@ def build_report_rows(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(records)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
 def transform_report_data(
     raw_df: pd.DataFrame,
     selected_vessels: list[str],
@@ -999,9 +999,94 @@ def sidebar_controls() -> tuple[date, date, str, list[str], bool]:
         st.sidebar.warning("Select at least one vessel.")
         st.stop()
 
-    refresh = st.sidebar.button("Refresh API data", use_container_width=True)
+    refresh = st.sidebar.button("Load / Refresh API data", use_container_width=True)
     return start_date, end_date, group, vessels, refresh
 
+
+
+# =============================================================================
+# Session-state data loading helpers
+# =============================================================================
+
+
+def request_signature(
+    username: str,
+    auth_method: str,
+    start_date: date,
+) -> dict[str, Any]:
+    return {
+        "endpoint": ODATA_ENDPOINT,
+        "username_hash": sha256(username.encode("utf-8")).hexdigest()[:12],
+        "auth_method": auth_method.lower(),
+        "start_date": start_date.isoformat(),
+    }
+
+
+def transform_signature(
+    raw_signature: dict[str, Any],
+    selected_vessels: list[str],
+    start_date: date,
+    end_date: date,
+) -> dict[str, Any]:
+    return {
+        **raw_signature,
+        "selected_vessels": tuple(selected_vessels),
+        "end_date": end_date.isoformat(),
+        "value_signature": sha256("|".join(VALUE_ALIASES.keys()).encode("utf-8")).hexdigest()[:12],
+    }
+
+
+def get_loaded_state() -> tuple[pd.DataFrame | None, pd.DataFrame | None, dict[str, Any] | None]:
+    raw_df = st.session_state.get("loaded_raw_df")
+    transformed_df = st.session_state.get("loaded_transformed_df")
+    metadata = st.session_state.get("loaded_metadata")
+    return raw_df, transformed_df, metadata
+
+
+def set_loaded_raw_state(
+    raw_df: pd.DataFrame,
+    metadata: dict[str, Any],
+    signature: dict[str, Any],
+) -> None:
+    metadata = metadata.copy()
+    metadata["loaded_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    metadata["loaded_start_date"] = signature["start_date"]
+    st.session_state["loaded_raw_df"] = raw_df
+    st.session_state["loaded_metadata"] = metadata
+    st.session_state["loaded_request_signature"] = signature
+    # The raw data changed, so any transformed data from the previous raw pull is stale.
+    st.session_state.pop("loaded_transformed_df", None)
+    st.session_state.pop("loaded_transform_signature", None)
+
+
+def set_loaded_transform_state(df: pd.DataFrame, signature: dict[str, Any]) -> None:
+    st.session_state["loaded_transformed_df"] = df
+    st.session_state["loaded_transform_signature"] = signature
+
+
+
+def raw_data_covers_request(
+    loaded_signature: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+    requested_signature: dict[str, Any],
+    requested_start_date: date,
+) -> bool:
+    if not loaded_signature or not metadata:
+        return False
+
+    # If the same API/user/auth data was fetched from an earlier start date, it
+    # also covers later start-date selections. No new API call is needed.
+    for key in ["endpoint", "username_hash", "auth_method"]:
+        if loaded_signature.get(key) != requested_signature.get(key):
+            return False
+
+    loaded_start_text = metadata.get("loaded_start_date") or loaded_signature.get("start_date")
+    try:
+        loaded_start_date = date.fromisoformat(str(loaded_start_text))
+    except ValueError:
+        return False
+
+    return loaded_start_date <= requested_start_date
 
 # =============================================================================
 # Main app
@@ -1022,43 +1107,67 @@ def main() -> None:
         st.stop()
 
     start_date, end_date, selected_group, selected_vessels, refresh = sidebar_controls()
-
-    if refresh:
-        fetch_report_data.clear()
-        transform_report_data.clear()
-        st.rerun()
-
     render_header(selected_group, selected_vessels, start_date, end_date)
 
-    try:
-        with st.spinner("Loading Marorka report data..."):
-            raw_df, metadata = fetch_report_data(
-                username=username,
-                password=password,
-                token=token,
-                auth_method=auth_method,
-                start_date=start_date,
+    raw_signature = request_signature(username, auth_method, start_date)
+    current_raw_signature = st.session_state.get("loaded_request_signature")
+    raw_df, df, metadata = get_loaded_state()
+
+    needs_raw_load = (
+        refresh
+        or raw_df is None
+        or metadata is None
+        or not raw_data_covers_request(current_raw_signature, metadata, raw_signature, start_date)
+    )
+
+    if needs_raw_load:
+        if not refresh:
+            st.info(
+                "Click **Load / Refresh API data** to pull Marorka data for the selected start date. "
+                "KPI filter changes will use the loaded data locally and will not call the API."
             )
-            df = transform_report_data(raw_df, selected_vessels, start_date, end_date)
-    except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else "unknown"
-        st.error(f"Marorka API request failed with status {status}.")
-        st.caption("If credentials are correct, try MARORKA_AUTH_METHOD = 'digest'.")
-        if exc.response is not None and exc.response.request is not None:
-            st.code(exc.response.request.url, language="text")
-        st.stop()
-    except (MarorkaConfigError, ValueError, requests.RequestException) as exc:
-        st.error(str(exc))
+            st.stop()
+
+        try:
+            fetch_report_data.clear()
+            with st.spinner("Loading Marorka report data..."):
+                raw_df, metadata = fetch_report_data(
+                    username=username,
+                    password=password,
+                    token=token,
+                    auth_method=auth_method,
+                    start_date=start_date,
+                )
+            set_loaded_raw_state(raw_df, metadata, raw_signature)
+            df = None
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            st.error(f"Marorka API request failed with status {status}.")
+            st.caption("If credentials are correct, try MARORKA_AUTH_METHOD = 'digest'.")
+            if exc.response is not None and exc.response.request is not None:
+                st.code(exc.response.request.url, language="text")
+            st.stop()
+        except (MarorkaConfigError, ValueError, requests.RequestException) as exc:
+            st.error(str(exc))
+            st.stop()
+
+    transform_sig = transform_signature(raw_signature, selected_vessels, start_date, end_date)
+    current_transform_sig = st.session_state.get("loaded_transform_signature")
+    df = st.session_state.get("loaded_transformed_df")
+    metadata = st.session_state.get("loaded_metadata")
+    raw_df = st.session_state.get("loaded_raw_df")
+
+    if raw_df is None or metadata is None:
+        st.info("Click **Load / Refresh API data** to load the selected report window.")
         st.stop()
 
-    with st.sidebar.expander("Loaded API coverage"):
-        st.metric("Raw API rows", f"{metadata['rows']:,}")
-        st.metric("API pages", f"{metadata['pages']:,}")
-        st.metric("Downloaded MB", metadata["downloaded_mb"])
-        if metadata.get("hit_page_limit"):
-            st.warning("The API reached the page safety limit. Increase MAX_ODATA_PAGES only after confirming memory usage.")
-        with st.expander("First API URL"):
-            st.code(metadata["first_url"], language="text")
+    if df is None or current_transform_sig != transform_sig:
+        try:
+            df = transform_report_data(raw_df, selected_vessels, start_date, end_date)
+            set_loaded_transform_state(df, transform_sig)
+        except (ValueError, TypeError) as exc:
+            st.error(str(exc))
+            st.stop()
 
     if df.empty:
         st.warning("No matching performance report values were returned for the selected fleet/date window.")
@@ -1117,6 +1226,10 @@ def main() -> None:
             {
                 "Metric": [
                     "Selected vessels",
+                    "Selected start date",
+                    "Selected end date",
+                    "API loaded at",
+                    "API loaded from start date",
                     "Transformed reports",
                     "Raw API rows",
                     "API pages",
@@ -1124,6 +1237,10 @@ def main() -> None:
                 ],
                 "Value": [
                     ", ".join(selected_vessels),
+                    start_date.isoformat(),
+                    end_date.isoformat(),
+                    metadata.get("loaded_at_utc", "-"),
+                    metadata.get("loaded_start_date", "-"),
                     f"{len(df):,}",
                     f"{metadata['rows']:,}",
                     f"{metadata['pages']:,}",
@@ -1132,6 +1249,9 @@ def main() -> None:
             }
         )
         st.dataframe(diagnostics, use_container_width=True, hide_index=True)
+
+        with st.expander("First API URL", expanded=False):
+            st.code(metadata.get("first_url", "-"), language="text")
 
         value_counts = raw_df.get("ValueDescription", pd.Series(dtype="object")).value_counts(dropna=False).reset_index()
         value_counts.columns = ["ValueDescription", "Raw rows"]
