@@ -26,7 +26,7 @@ from requests.auth import HTTPBasicAuth, HTTPDigestAuth
 
 APP_TITLE = "Magic Noon alla Mantalos"
 APP_DIR = Path(__file__).resolve().parent
-DEFAULT_BACKGROUND_IMAGE = APP_DIR / "assets" / "background.jpg"
+DEFAULT_BACKGROUND_IMAGE = APP_DIR / "mantalos-nikolic-960x540.webp"
 ODATA_ENDPOINT = "https://online.marorka.com/Odata/v1/ODataService.svc/ReportData"
 MAX_ODATA_PAGES = 250
 API_CACHE_TTL_SECONDS = 21600  # 6 hours; KPI filters use local data and do not refetch.
@@ -381,6 +381,8 @@ def dashboard_background_image_url() -> str:
     image_path = Path(source).expanduser() if source else DEFAULT_BACKGROUND_IMAGE
     if not image_path.is_absolute():
         image_path = APP_DIR / image_path
+    if source and not image_path.is_file():
+        image_path = DEFAULT_BACKGROUND_IMAGE
 
     if not image_path.is_file():
         return ""
