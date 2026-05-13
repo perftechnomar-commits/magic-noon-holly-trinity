@@ -325,28 +325,6 @@ def apply_custom_css() -> None:
             border: 1px solid rgba(255, 216, 74, 0.28) !important;
             border-radius: 14px !important;
         }
-
-        div[data-testid="stSlider"] div[role="slider"] + div {
-            background: transparent !important;
-        }
-
-        div[data-testid="stSlider"] [data-baseweb="slider"] * {
-            border-color: transparent !important;
-        }
-        
-        div[data-testid="stSlider"] [role="slider"]::before,
-        div[data-testid="stSlider"] [role="slider"]::after {
-            display: none !important;
-            border: none !important;
-            box-shadow: none !important;
-        }
-        
-        div[data-testid="stSlider"] [role="slider"] {
-            background: #FFD84A !important;
-            border: 2px solid #121008 !important;
-            box-shadow: none !important;
-            outline: none !important;
-        }
         [data-baseweb="tag"] {
             background: linear-gradient(135deg, rgba(255, 216, 74, 0.22), rgba(255, 176, 0, 0.14)) !important;
             border: 1px solid rgba(255, 216, 74, 0.38) !important;
@@ -452,6 +430,37 @@ def apply_custom_css() -> None:
             background: linear-gradient(135deg, rgba(255, 216, 74, 0.98), rgba(255, 176, 0, 0.86)) !important;
             color: #121008 !important;
             font-weight: 850 !important;
+        }
+        div[data-testid="stSlider"] *[style*="rgb(255, 75, 75)"],
+        div[data-testid="stSlider"] *[style*="#ff4b4b"],
+        div[data-testid="stSlider"] *[style*="255, 75, 75"] {
+            background: #FFD84A !important;
+            background-color: #FFD84A !important;
+            color: #FFD84A !important;
+            border-color: #FFD84A !important;
+        }
+        div[data-testid="stSlider"] *[style*="rgb(49, 51, 63)"],
+        div[data-testid="stSlider"] *[style*="rgb(38, 39, 48)"],
+        div[data-testid="stSlider"] *[style*="#31333f"],
+        div[data-testid="stSlider"] *[style*="#262730"] {
+            background: #050505 !important;
+            background-color: #050505 !important;
+        }
+        div[data-testid="stSlider"] [role="slider"],
+        div[data-testid="stSlider"] [role="slider"] *,
+        div[data-testid="stSlider"] [role="slider"]::before,
+        div[data-testid="stSlider"] [role="slider"]::after {
+            background: #FFD84A !important;
+            background-color: #FFD84A !important;
+            border-color: #121008 !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+        div[data-testid="stSlider"] label,
+        div[data-testid="stSlider"] p,
+        div[data-testid="stSlider"] span {
+            color: #FFD84A !important;
+            font-weight: 800 !important;
         }
         </style>
         """
