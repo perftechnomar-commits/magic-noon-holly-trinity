@@ -435,6 +435,47 @@ def apply_custom_css() -> None:
             }
         }
 
+        div[data-testid="stMetric"] {
+            position: relative;
+            background: __KPI_BACKGROUND__ !important;
+            border: 1px solid rgba(255, 216, 74, 0.56) !important;
+            border-radius: 20px !important;
+            padding: 1.15rem 1.1rem !important;
+            box-shadow: __KPI_BOX_SHADOW__ !important;
+            backdrop-filter: __KPI_BACKDROP_FILTER__;
+            min-height: 118px;
+            overflow: hidden;
+        }
+
+        div[data-testid="stMetric"]::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 1rem;
+            right: 1rem;
+            height: 2px;
+            background: linear-gradient(90deg, rgba(255,216,74,0), rgba(255,216,74,0.92), rgba(255,176,0,0));
+        }
+
+        div[data-testid="stMetricLabel"] p {
+            color: #F5EFD8 !important;
+            font-weight: 800 !important;
+            font-size: 0.82rem !important;
+            line-height: 1.25 !important;
+            text-shadow: 0 2px 12px rgba(0,0,0,0.96), 0 0 18px rgba(0,0,0,0.70);
+        }
+
+        div[data-testid="stMetricValue"] {
+            color: #FFFBEA !important;
+            font-size: clamp(1.85rem, 2.2vw, 2.45rem) !important;
+            line-height: 1 !important;
+            font-weight: 950 !important;
+            letter-spacing: 0 !important;
+            text-shadow: 0 3px 18px rgba(0,0,0,0.98), 0 0 22px rgba(0,0,0,0.78);
+            white-space: normal !important;
+            overflow-wrap: anywhere !important;
+        }
+
         div[data-testid="stDataFrame"] {
             border: 1px solid var(--border);
             border-radius: 18px;
@@ -511,18 +552,25 @@ def dashboard_kpi_background(*, has_background_image: bool) -> str:
     if has_background_image:
         return "transparent"
 
-    return "linear-gradient(180deg, rgba(25, 23, 15, 0.98), rgba(12, 12, 8, 0.98))"
+    return (
+        "linear-gradient(135deg, rgba(255, 216, 74, 0.12), rgba(255, 176, 0, 0.04) 42%, rgba(5, 5, 5, 0.94)), "
+        "linear-gradient(180deg, rgba(28, 25, 14, 0.98), rgba(8, 8, 5, 0.98))"
+    )
 
 
 def dashboard_kpi_backdrop_filter(*, has_background_image: bool) -> str:
-    return "none" if has_background_image else "none"
+    return "none" if has_background_image else "blur(10px)"
 
 
 def dashboard_kpi_box_shadow(*, has_background_image: bool) -> str:
     if has_background_image:
         return "inset 0 1px 0 rgba(255,216,74,0.22)"
 
-    return "0 14px 34px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,216,74,0.10)"
+    return (
+        "0 18px 42px rgba(0,0,0,0.42), "
+        "0 0 28px rgba(255,176,0,0.08), "
+        "inset 0 1px 0 rgba(255,216,74,0.18)"
+    )
 
 
 def dashboard_background_image_url() -> str:
@@ -1138,22 +1186,11 @@ def render_kpis(performance_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
     sfoc = numeric_series(performance_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
     boiler = numeric_series(boiler_df, "Boiler Sum").sum(min_count=1)
 
-    cards = [
-        ("Average Calculated Slip", format_percentage(slip)),
-        ("Average ME Load [%MCR]", format_percentage(me_load)),
-        ("Average SFOC [gr/Kwh]", format_value(sfoc, 2)),
-        ("Boiler Sum", format_value(boiler, 2)),
-    ]
-    cards_html = "".join(
-        (
-            '<div class="kpi-card">'
-            f'<div class="kpi-label">{escape(label)}</div>'
-            f'<div class="kpi-value">{escape(str(value))}</div>'
-            '</div>'
-        )
-        for label, value in cards
-    )
-    st.markdown(f'<div class="kpi-grid">{cards_html}</div>', unsafe_allow_html=True)
+    cols = st.columns(4)
+    cols[0].metric("Average Calculated Slip", format_percentage(slip))
+    cols[1].metric("Average ME Load [%MCR]", format_percentage(me_load))
+    cols[2].metric("Average SFOC [gr/Kwh]", format_value(sfoc, 2))
+    cols[3].metric("Boiler Sum", format_value(boiler, 2))
 
 
 
