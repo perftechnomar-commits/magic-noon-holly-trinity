@@ -326,21 +326,28 @@ def apply_custom_css() -> None:
             border-radius: 14px !important;
         }
 
-        div[data-testid="stSlider"] [data-baseweb="slider"] > div > div {
+        div[data-testid="stSlider"] [data-baseweb="slider"] div {
+            box-shadow: none !important;
+        }
+
+        /* Full excluded track */
+        div[data-testid="stSlider"] [data-baseweb="slider"] > div {
+            background: #080808 !important;
+        }
+
+        /* Selected range track */
+        div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(2) {
             background: #FFD84A !important;
         }
 
+        /* Slider handles */
         div[data-testid="stSlider"] [role="slider"] {
             background: #FFD84A !important;
             border: 2px solid #121008 !important;
-            box-shadow: 0 0 0 2px rgba(255, 216, 74, 0.22) !important;
+            box-shadow: 0 0 0 2px rgba(255, 216, 74, 0.28) !important;
         }
 
-        div[data-testid="stSlider"] [data-baseweb="slider"] {
-            padding-top: 0.4rem;
-            padding-bottom: 0.6rem;
-        }
-
+        /* Date labels */
         div[data-testid="stSlider"] p {
             color: #FFD84A !important;
             font-weight: 700 !important;
