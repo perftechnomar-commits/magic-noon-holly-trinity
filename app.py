@@ -1145,12 +1145,12 @@ def render_kpis(performance_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
         ("Boiler Sum", format_value(boiler, 2)),
     ]
     cards_html = "".join(
-        f"""
-        <div class="kpi-card">
-            <div class="kpi-label">{escape(label)}</div>
-            <div class="kpi-value">{escape(str(value))}</div>
-        </div>
-        """
+        (
+            '<div class="kpi-card">'
+            f'<div class="kpi-label">{escape(label)}</div>'
+            f'<div class="kpi-value">{escape(str(value))}</div>'
+            '</div>'
+        )
         for label, value in cards
     )
     st.markdown(f'<div class="kpi-grid">{cards_html}</div>', unsafe_allow_html=True)
