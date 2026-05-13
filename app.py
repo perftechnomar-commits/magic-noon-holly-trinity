@@ -326,25 +326,45 @@ def apply_custom_css() -> None:
             border-radius: 14px !important;
         }
 
-        div[data-testid="stSlider"] [data-baseweb="slider"] div {
-            box-shadow: none !important;
+        /* Remove slider background blocks */
+        div[data-testid="stSlider"] {
+            background: transparent !important;
         }
 
-        /* Full excluded track */
-        div[data-testid="stSlider"] [data-baseweb="slider"] > div {
-            background: #080808 !important;
+        div[data-testid="stSlider"] > div {
+            background: transparent !important;
         }
 
-        /* Selected range track */
+        div[data-testid="stSlider"] [data-baseweb="slider"] {
+            background: transparent !important;
+        }
+
+        /* Entire slider line = black */
+        div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:first-child {
+            background: #050505 !important;
+            height: 4px !important;
+            border-radius: 999px !important;
+        }
+
+        /* Selected range between handles = yellow */
         div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(2) {
             background: #FFD84A !important;
+            height: 4px !important;
+            border-radius: 999px !important;
+        }
+
+        /* Remove the extra yellow right-side block */
+        div[data-testid="stSlider"] [data-baseweb="slider"] > div > div:nth-child(3) {
+            background: transparent !important;
         }
 
         /* Slider handles */
         div[data-testid="stSlider"] [role="slider"] {
             background: #FFD84A !important;
             border: 2px solid #121008 !important;
-            box-shadow: 0 0 0 2px rgba(255, 216, 74, 0.28) !important;
+            width: 18px !important;
+            height: 18px !important;
+            box-shadow: none !important;
         }
 
         /* Date labels */
