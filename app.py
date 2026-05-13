@@ -325,42 +325,44 @@ def apply_custom_css() -> None:
         }
 
         [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
-        [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within > div,
         [data-testid="stDateInput"] input:focus {
             border-color: rgba(255, 216, 74, 0.72) !important;
             box-shadow: none !important;
             outline: none !important;
         }
 
-        div[data-baseweb="calendar"] {
-            --primary-color: #FFD84A;
-            --primary-color-rgb: 255, 216, 74;
-        }
-
-        div[data-baseweb="calendar"] button[aria-selected="true"] {
-            background: #FFD84A !important;
-            background-color: #FFD84A !important;
-            border: none !important;
-            color: #121008 !important;
+        div[data-baseweb="calendar"] button,
+        div[data-baseweb="calendar"] [role="button"] {
             border-radius: 999px !important;
             box-shadow: none !important;
             outline: none !important;
         }
 
-        div[data-baseweb="calendar"] button[aria-selected="true"] * {
+        div[data-baseweb="calendar"] button[aria-selected="true"],
+        div[data-baseweb="calendar"] [role="button"][aria-selected="true"],
+        div[data-baseweb="calendar"] button[aria-current="date"],
+        div[data-baseweb="calendar"] [role="button"][aria-current="date"] {
+            background: #FFD84A !important;
+            background-color: #FFD84A !important;
+            color: #121008 !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+
+        div[data-baseweb="calendar"] button[aria-selected="true"] *,
+        div[data-baseweb="calendar"] [role="button"][aria-selected="true"] *,
+        div[data-baseweb="calendar"] button[aria-current="date"] *,
+        div[data-baseweb="calendar"] [role="button"][aria-current="date"] * {
             color: #121008 !important;
         }
 
-        div[data-baseweb="calendar"] button:hover {
-            background-color: rgba(255, 216, 74, 0.12) !important;
-            border-radius: 999px !important;
-        }
-
-        [data-baseweb="tag"] {
-            background: linear-gradient(135deg, rgba(255, 216, 74, 0.22), rgba(255, 176, 0, 0.14)) !important;
-            border: 1px solid rgba(255, 216, 74, 0.38) !important;
-            color: #FFF7CC !important;
-            border-radius: 999px !important;
+        div[data-baseweb="calendar"] button:focus,
+        div[data-baseweb="calendar"] button:focus-visible,
+        div[data-baseweb="calendar"] [role="button"]:focus,
+        div[data-baseweb="calendar"] [role="button"]:focus-visible {
+            box-shadow: none !important;
+            outline: none !important;
         }
         [data-baseweb="tag"] span { color: #FFF7CC !important; }
         [data-baseweb="tag"] svg { color: #FFF7CC !important; }
