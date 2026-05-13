@@ -324,39 +324,39 @@ def apply_custom_css() -> None:
             border-radius: 14px !important;
         }
 
-        [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
-        [data-testid="stDateInput"] input:focus {
-            border-color: rgba(255, 216, 74, 0.72) !important;
-            box-shadow: none !important;
-            outline: none !important;
-        }
-
-        div[data-baseweb="calendar"] [aria-selected="true"],
-        div[data-baseweb="calendar"] [aria-selected="true"] *,
-        div[data-baseweb="calendar"] [aria-current="date"],
-        div[data-baseweb="calendar"] [aria-current="date"] *,
-        div[data-baseweb="calendar"] [aria-label*="Selected"],
-        div[data-baseweb="calendar"] [aria-label*="Selected"] *,
-        div[data-baseweb="calendar"] [aria-label*="31"],
-        div[data-baseweb="calendar"] [aria-label*="31"] * {
-            background: #FFD84A !important;
-            background-color: #FFD84A !important;
-            color: #121008 !important;
+        /* Date input focus */
+        [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within {
             border-color: #FFD84A !important;
             box-shadow: none !important;
             outline: none !important;
         }
 
-        div[data-baseweb="calendar"] [aria-selected="true"],
-        div[data-baseweb="calendar"] [aria-current="date"],
-        div[data-baseweb="calendar"] [aria-label*="Selected"] {
-            border-radius: 999px !important;
+        /* Selected day circle */
+        div[data-baseweb="calendar"] button[aria-selected="true"] {
+            background: transparent !important;
+            box-shadow: none !important;
+            outline: none !important;
         }
 
+        /* Inner selected element */
+        div[data-baseweb="calendar"] button[aria-selected="true"] > div,
+        div[data-baseweb="calendar"] button[aria-selected="true"] span,
+        div[data-baseweb="calendar"] button[aria-selected="true"] div {
+            background: #FFD84A !important;
+            background-color: #FFD84A !important;
+            color: #121008 !important;
+            border-radius: 999px !important;
+            border: none !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+
+        /* Remove all orange hover/focus states */
+        div[data-baseweb="calendar"] button:hover,
         div[data-baseweb="calendar"] button:focus,
         div[data-baseweb="calendar"] button:focus-visible,
-        div[data-baseweb="calendar"] [role="button"]:focus,
-        div[data-baseweb="calendar"] [role="button"]:focus-visible {
+        div[data-baseweb="calendar"] button *:hover,
+        div[data-baseweb="calendar"] button *:focus {
             box-shadow: none !important;
             outline: none !important;
         }
