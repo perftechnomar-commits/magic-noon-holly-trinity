@@ -32,7 +32,6 @@ MAX_ODATA_PAGES = 250
 API_CACHE_TTL_SECONDS = 21600  # 6 hours; KPI filters use local data and do not refetch.
 UI_DATE_INPUT_FORMAT = "DD/MM/YYYY"
 DISPLAY_DATETIME_FORMAT = "%d/%m/%Y %H:%M"
-MAX_API_FILTER_VESSELS = 12
 
 EXCLUDED_REPORT_TYPES = [
     "Intake Report",
@@ -192,9 +191,9 @@ def apply_custom_css() -> None:
     hero_background = dashboard_hero_background(has_background_image=bool(background_image_url))
     hero_backdrop_filter = dashboard_hero_backdrop_filter(has_background_image=bool(background_image_url))
     hero_box_shadow = dashboard_hero_box_shadow(has_background_image=bool(background_image_url))
-    kpi_background = dashboard_kpi_background(has_background_image=bool(background_image_url))
-    kpi_backdrop_filter = dashboard_kpi_backdrop_filter(has_background_image=bool(background_image_url))
-    kpi_box_shadow = dashboard_kpi_box_shadow(has_background_image=bool(background_image_url))
+    metric_background = dashboard_metric_background(has_background_image=bool(background_image_url))
+    metric_backdrop_filter = dashboard_metric_backdrop_filter(has_background_image=bool(background_image_url))
+    metric_box_shadow = dashboard_metric_box_shadow(has_background_image=bool(background_image_url))
     st.markdown(
         """
         <style>
@@ -378,13 +377,13 @@ def apply_custom_css() -> None:
 
         div[data-testid="stMetric"] {
             position: relative;
-            background: __KPI_BACKGROUND__ !important;
+            background: __METRIC_BACKGROUND__ !important;
             border: 1px solid rgba(255, 216, 74, 0.56) !important;
             border-radius: 20px !important;
-            padding: 1.15rem 1.1rem !important;
-            box-shadow: __KPI_BOX_SHADOW__ !important;
-            backdrop-filter: __KPI_BACKDROP_FILTER__;
-            min-height: 118px;
+            padding: 1.05rem 1.1rem !important;
+            box-shadow: __METRIC_BOX_SHADOW__ !important;
+            backdrop-filter: __METRIC_BACKDROP_FILTER__;
+            min-height: 124px;
             overflow: hidden;
         }
 
@@ -450,9 +449,9 @@ def apply_custom_css() -> None:
         .replace("__HERO_BACKGROUND__", hero_background)
         .replace("__HERO_BACKDROP_FILTER__", hero_backdrop_filter)
         .replace("__HERO_BOX_SHADOW__", hero_box_shadow)
-        .replace("__KPI_BACKGROUND__", kpi_background)
-        .replace("__KPI_BACKDROP_FILTER__", kpi_backdrop_filter)
-        .replace("__KPI_BOX_SHADOW__", kpi_box_shadow),
+        .replace("__METRIC_BACKGROUND__", metric_background)
+        .replace("__METRIC_BACKDROP_FILTER__", metric_backdrop_filter)
+        .replace("__METRIC_BOX_SHADOW__", metric_box_shadow),
         unsafe_allow_html=True,
     )
 
@@ -489,7 +488,7 @@ def dashboard_hero_box_shadow(*, has_background_image: bool) -> str:
     return "0 24px 70px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,216,74,0.18)"
 
 
-def dashboard_kpi_background(*, has_background_image: bool) -> str:
+def dashboard_metric_background(*, has_background_image: bool) -> str:
     if has_background_image:
         return "transparent"
 
@@ -499,11 +498,11 @@ def dashboard_kpi_background(*, has_background_image: bool) -> str:
     )
 
 
-def dashboard_kpi_backdrop_filter(*, has_background_image: bool) -> str:
+def dashboard_metric_backdrop_filter(*, has_background_image: bool) -> str:
     return "none" if has_background_image else "blur(10px)"
 
 
-def dashboard_kpi_box_shadow(*, has_background_image: bool) -> str:
+def dashboard_metric_box_shadow(*, has_background_image: bool) -> str:
     if has_background_image:
         return "inset 0 1px 0 rgba(255,216,74,0.22)"
 
@@ -637,31 +636,10 @@ def default_report_window(today: date | None = None) -> tuple[date, date]:
     return start_date, end_date
 
 
-def odata_quote(value: str) -> str:
-    return str(value).replace("'", "''")
-
-
-def build_odata_url(
-    start_date: date,
-    end_date: date | None = None,
-    selected_vessels: tuple[str, ...] = (),
-) -> str:
+def build_odata_url(start_date: date) -> str:
     start_text = start_date.strftime("%Y-%m-%d")
-    filters = [f"StartDateTimeGMT gt DateTime'{start_text}'"]
-
-    if end_date is not None:
-        end_text = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
-        filters.append(f"StartDateTimeGMT lt DateTime'{end_text}'")
-
-    if 0 < len(selected_vessels) <= MAX_API_FILTER_VESSELS:
-        vessel_filter = " or ".join(
-            f"ShipName eq '{odata_quote(vessel)}'"
-            for vessel in selected_vessels
-        )
-        filters.append(f"({vessel_filter})")
-
     params = {
-        "$filter": " and ".join(filters),
+        "$filter": f"StartDateTimeGMT gt DateTime'{start_text}'",
         "$select": ",".join(SOURCE_COLUMNS),
     }
     return f"{ODATA_ENDPOINT}?{urlencode(params)}"
@@ -695,52 +673,23 @@ def rows_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return df
 
 
-def filter_report_page_rows(
-    rows: list[dict[str, Any]],
-    selected_vessels: tuple[str, ...],
+@st.cache_data(ttl=API_CACHE_TTL_SECONDS, show_spinner=False)
+def fetch_report_data(
+    username: str,
+    password: str,
+    token: str,
+    auth_method: str,
     start_date: date,
-    end_date: date,
-) -> list[dict[str, Any]]:
-    page_df = rows_to_dataframe(rows)
-    if page_df.empty:
-        return []
-
-    missing_columns = sorted(set(SOURCE_COLUMNS).difference(page_df.columns))
-    if missing_columns:
-        raise ValueError(f"Missing expected API columns: {', '.join(missing_columns)}")
-
-    page_df["StartDateTimeGMT"] = parse_datetime_series(page_df["StartDateTimeGMT"])
-    page_df["_value_key"] = page_df["ValueDescription"].map(normalize_text)
-
-    start_timestamp = pd.Timestamp(start_date, tz="UTC")
-    end_timestamp = pd.Timestamp(end_date + timedelta(days=1), tz="UTC")
-    mask = (
-        page_df["ValueDescription"].notna()
-        & page_df["_value_key"].isin(wanted_value_keys())
-        & ~page_df["ReportType"].isin(EXCLUDED_REPORT_TYPES)
-        & match_selected_vessels(page_df["ShipName"], list(selected_vessels))
-        & page_df["StartDateTimeGMT"].ge(start_timestamp)
-        & page_df["StartDateTimeGMT"].lt(end_timestamp)
-    )
-
-    return page_df.loc[mask, SOURCE_COLUMNS].to_dict("records")
-
-
-def fetch_report_pages(
-    first_url: str,
-    *,
-    auth: Any,
-    headers: dict[str, str],
-    selected_vessels: tuple[str, ...],
-    start_date: date,
-    end_date: date,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    next_url = first_url
+    started_at = time.perf_counter()
+    next_url = build_odata_url(start_date)
     all_rows: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     pages = 0
-    api_rows = 0
     total_bytes = 0
+    first_url = next_url
+    auth = request_auth(username, password, auth_method)
+    headers = request_headers(token, auth_method)
 
     with requests.Session() as session:
         session.headers.update(headers)
@@ -759,8 +708,7 @@ def fetch_report_pages(
             pages += 1
 
             page_rows, next_link = extract_odata_page(response.json())
-            api_rows += len(page_rows)
-            all_rows.extend(filter_report_page_rows(page_rows, selected_vessels, start_date, end_date))
+            all_rows.extend(page_rows)
 
             if not next_link:
                 break
@@ -768,63 +716,13 @@ def fetch_report_pages(
 
     metadata = {
         "rows": len(all_rows),
-        "api_rows": api_rows,
-        "retained_rows": len(all_rows),
         "pages": pages,
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
+        "fetch_seconds": round(time.perf_counter() - started_at, 2),
         "first_url": first_url,
         "hit_page_limit": pages >= MAX_ODATA_PAGES,
     }
-    raw_df = rows_to_dataframe(all_rows)
-    if raw_df.empty:
-        raw_df = pd.DataFrame(columns=SOURCE_COLUMNS)
-    return raw_df, metadata
-
-
-@st.cache_data(ttl=API_CACHE_TTL_SECONDS, show_spinner=False)
-def fetch_report_data(
-    username: str,
-    password: str,
-    token: str,
-    auth_method: str,
-    start_date: date,
-    end_date: date,
-    selected_vessels: tuple[str, ...],
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    started_at = time.perf_counter()
-    filtered_url = build_odata_url(start_date, end_date, selected_vessels)
-    broad_url = build_odata_url(start_date)
-    auth = request_auth(username, password, auth_method)
-    headers = request_headers(token, auth_method)
-    used_filtered_api = filtered_url != broad_url
-    used_fallback = False
-
-    try:
-        raw_df, metadata = fetch_report_pages(
-            filtered_url,
-            auth=auth,
-            headers=headers,
-            selected_vessels=selected_vessels,
-            start_date=start_date,
-            end_date=end_date,
-        )
-    except (requests.HTTPError, requests.RequestException, ValueError):
-        if not used_filtered_api:
-            raise
-        used_fallback = True
-        raw_df, metadata = fetch_report_pages(
-            broad_url,
-            auth=auth,
-            headers=headers,
-            selected_vessels=selected_vessels,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-    metadata["fetch_seconds"] = round(time.perf_counter() - started_at, 2)
-    metadata["api_filter_mode"] = "fallback broad" if used_fallback else "selected date/vessel"
-    metadata["requested_vessels"] = ", ".join(selected_vessels)
-    return raw_df, metadata
+    return rows_to_dataframe(all_rows), metadata
 
 
 # =============================================================================
@@ -1122,6 +1020,12 @@ def numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
 
 
 def render_kpis(performance_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
+    latest_value = (
+        performance_df["EndDateTimeGMT"].max()
+        if "EndDateTimeGMT" in performance_df.columns and not performance_df.empty
+        else pd.NA
+    )
+
     slip = numeric_series(performance_df, "Calculated Slip").mean()
     me_load = numeric_series(performance_df, "ME Load [%MCR]").mean()
     sfoc = numeric_series(performance_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
@@ -1407,7 +1311,7 @@ def selected_vessel_controls() -> tuple[str, list[str]]:
     return selected_group, vessels
 
 
-def sidebar_controls() -> tuple[date, date, str, list[str], bool, bool]:
+def sidebar_controls() -> tuple[date, date, str, list[str], bool]:
     default_start, default_end = default_report_window()
     st.sidebar.header("Data Window")
     start_date = st.sidebar.date_input("Start date", value=default_start, format=UI_DATE_INPUT_FORMAT)
@@ -1420,13 +1324,8 @@ def sidebar_controls() -> tuple[date, date, str, list[str], bool, bool]:
     st.sidebar.header("Fleet Selection")
     group, vessels = selected_vessel_controls()
 
-    force_refresh = st.sidebar.checkbox(
-        "Force fresh API pull",
-        value=False,
-        help="Bypass the 6-hour Streamlit cache. Leave this off for faster repeat loads.",
-    )
     refresh = st.sidebar.button("Load / Refresh API data", use_container_width=True)
-    return start_date, end_date, group, vessels, refresh, force_refresh
+    return start_date, end_date, group, vessels, refresh
 
 
 
@@ -1439,16 +1338,12 @@ def request_signature(
     username: str,
     auth_method: str,
     start_date: date,
-    end_date: date,
-    selected_vessels: list[str],
 ) -> dict[str, Any]:
     return {
         "endpoint": ODATA_ENDPOINT,
         "username_hash": sha256(username.encode("utf-8")).hexdigest()[:12],
         "auth_method": auth_method.lower(),
         "start_date": start_date.isoformat(),
-        "end_date": end_date.isoformat(),
-        "loaded_vessels": tuple(selected_vessels),
     }
 
 
@@ -1481,8 +1376,6 @@ def set_loaded_raw_state(
     metadata = metadata.copy()
     metadata["loaded_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     metadata["loaded_start_date"] = signature["start_date"]
-    metadata["loaded_end_date"] = signature["end_date"]
-    metadata["loaded_vessels"] = ", ".join(signature["loaded_vessels"])
     st.session_state["loaded_raw_df"] = raw_df
     st.session_state["loaded_metadata"] = metadata
     st.session_state["loaded_request_signature"] = signature
@@ -1502,25 +1395,23 @@ def raw_data_covers_request(
     metadata: dict[str, Any] | None,
     requested_signature: dict[str, Any],
     requested_start_date: date,
-    requested_end_date: date,
 ) -> bool:
     if not loaded_signature or not metadata:
         return False
 
-    # Raw data can be reused when the loaded date/vessel window fully covers the request.
-    for key in ["endpoint", "username_hash", "auth_method", "loaded_vessels"]:
+    # If the same API/user/auth data was fetched from an earlier start date, it
+    # also covers later start-date selections. No new API call is needed.
+    for key in ["endpoint", "username_hash", "auth_method"]:
         if loaded_signature.get(key) != requested_signature.get(key):
             return False
 
     loaded_start_text = metadata.get("loaded_start_date") or loaded_signature.get("start_date")
-    loaded_end_text = metadata.get("loaded_end_date") or loaded_signature.get("end_date")
     try:
         loaded_start_date = date.fromisoformat(str(loaded_start_text))
-        loaded_end_date = date.fromisoformat(str(loaded_end_text))
     except ValueError:
         return False
 
-    return loaded_start_date <= requested_start_date and loaded_end_date >= requested_end_date
+    return loaded_start_date <= requested_start_date
 
 # =============================================================================
 # Main app
@@ -1540,10 +1431,10 @@ def main() -> None:
         st.info("Add MARORKA_USERNAME and MARORKA_PASSWORD to .streamlit/secrets.toml.")
         st.stop()
 
-    start_date, end_date, selected_group, selected_vessels, refresh, force_refresh = sidebar_controls()
+    start_date, end_date, selected_group, selected_vessels, refresh = sidebar_controls()
     render_header(selected_group, selected_vessels, start_date, end_date)
 
-    raw_signature = request_signature(username, auth_method, start_date, end_date, selected_vessels)
+    raw_signature = request_signature(username, auth_method, start_date)
     current_raw_signature = st.session_state.get("loaded_request_signature")
     raw_df, df, metadata = get_loaded_state()
 
@@ -1551,7 +1442,7 @@ def main() -> None:
         refresh
         or raw_df is None
         or metadata is None
-        or not raw_data_covers_request(current_raw_signature, metadata, raw_signature, start_date, end_date)
+        or not raw_data_covers_request(current_raw_signature, metadata, raw_signature, start_date)
     )
 
     if needs_raw_load:
@@ -1563,8 +1454,7 @@ def main() -> None:
             st.stop()
 
         try:
-            if force_refresh:
-                fetch_report_data.clear()
+            fetch_report_data.clear()
             with st.spinner("Loading Marorka report data..."):
                 raw_df, metadata = fetch_report_data(
                     username=username,
@@ -1572,8 +1462,6 @@ def main() -> None:
                     token=token,
                     auth_method=auth_method,
                     start_date=start_date,
-                    end_date=end_date,
-                    selected_vessels=tuple(selected_vessels),
                 )
             set_loaded_raw_state(raw_df, metadata, raw_signature)
             df = None
@@ -1668,12 +1556,8 @@ def main() -> None:
                     "Selected end date",
                     "API loaded at",
                     "API loaded from start date",
-                    "API loaded through end date",
-                    "API filter mode",
-                    "Loaded vessels",
                     "Transformed reports",
-                    "API rows downloaded",
-                    "Rows retained locally",
+                    "Raw API rows",
                     "API pages",
                     "Downloaded MB",
                     "API fetch seconds",
@@ -1685,12 +1569,8 @@ def main() -> None:
                     end_date.isoformat(),
                     metadata.get("loaded_at_utc", "-"),
                     metadata.get("loaded_start_date", "-"),
-                    metadata.get("loaded_end_date", "-"),
-                    metadata.get("api_filter_mode", "-"),
-                    metadata.get("loaded_vessels", "-"),
                     f"{len(df):,}",
-                    f"{metadata.get('api_rows', metadata.get('rows', 0)):,}",
-                    f"{metadata.get('retained_rows', metadata.get('rows', 0)):,}",
+                    f"{metadata['rows']:,}",
                     f"{metadata['pages']:,}",
                     metadata["downloaded_mb"],
                     metadata.get("fetch_seconds", "-"),
