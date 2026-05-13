@@ -387,7 +387,7 @@ def apply_custom_css() -> None:
             position: relative;
             min-height: 118px;
             padding: 1.15rem 1.1rem;
-            border: 1px solid rgba(255, 216, 74, 0.42);
+            border: 1px solid rgba(255, 216, 74, 0.56);
             border-radius: 20px;
             background: __KPI_BACKGROUND__;
             box-shadow: __KPI_BOX_SHADOW__;
@@ -410,7 +410,7 @@ def apply_custom_css() -> None:
             font-size: 0.82rem;
             font-weight: 800;
             line-height: 1.25;
-            text-shadow: 0 2px 10px rgba(0,0,0,0.88);
+            text-shadow: 0 2px 12px rgba(0,0,0,0.96), 0 0 18px rgba(0,0,0,0.70);
         }
 
         .kpi-value {
@@ -420,7 +420,7 @@ def apply_custom_css() -> None:
             font-weight: 950;
             letter-spacing: 0;
             margin-top: 0.65rem;
-            text-shadow: 0 3px 16px rgba(0,0,0,0.92);
+            text-shadow: 0 3px 18px rgba(0,0,0,0.98), 0 0 22px rgba(0,0,0,0.78);
         }
 
         @media (max-width: 900px) {
@@ -509,18 +509,18 @@ def dashboard_hero_box_shadow(*, has_background_image: bool) -> str:
 
 def dashboard_kpi_background(*, has_background_image: bool) -> str:
     if has_background_image:
-        return "linear-gradient(135deg, rgba(5, 5, 5, 0.26), rgba(5, 5, 5, 0.10))"
+        return "transparent"
 
     return "linear-gradient(180deg, rgba(25, 23, 15, 0.98), rgba(12, 12, 8, 0.98))"
 
 
 def dashboard_kpi_backdrop_filter(*, has_background_image: bool) -> str:
-    return "blur(4px)" if has_background_image else "none"
+    return "none" if has_background_image else "none"
 
 
 def dashboard_kpi_box_shadow(*, has_background_image: bool) -> str:
     if has_background_image:
-        return "inset 0 1px 0 rgba(255,216,74,0.18), 0 14px 34px rgba(0,0,0,0.16)"
+        return "inset 0 1px 0 rgba(255,216,74,0.22)"
 
     return "0 14px 34px rgba(0,0,0,0.34), inset 0 1px 0 rgba(255,216,74,0.10)"
 
