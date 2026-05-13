@@ -32,6 +32,8 @@ MAX_ODATA_PAGES = 250
 API_CACHE_TTL_SECONDS = 21600  # 6 hours; KPI filters use local data and do not refetch.
 UI_DATE_INPUT_FORMAT = "DD/MM/YYYY"
 DISPLAY_DATETIME_FORMAT = "%d/%m/%Y %H:%M"
+API_FULL_START_DATE = date(2026, 1, 1)
+
 
 EXCLUDED_REPORT_TYPES = [
     "Intake Report",
@@ -324,11 +326,24 @@ def apply_custom_css() -> None:
             border-radius: 14px !important;
         }
 
-        [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
-        [data-testid="stDateInput"] input:focus {
-            border-color: #FFD84A !important;
-            box-shadow: none !important;
+                [data-testid="stSlider"] [data-baseweb="slider"] > div {
+            color: #FFD84A !important;
+        }
+
+        [data-testid="stSlider"] [role="slider"] {
+            background-color: #FFD84A !important;
+            border: 2px solid #121008 !important;
+            box-shadow: 0 0 0 2px rgba(255, 216, 74, 0.36) !important;
+        }
+
+        [data-testid="stSlider"] [role="slider"]:focus,
+        [data-testid="stSlider"] [role="slider"]:focus-visible {
             outline: none !important;
+            box-shadow: 0 0 0 3px rgba(255, 216, 74, 0.42) !important;
+        }
+
+        [data-testid="stSlider"] div[data-testid="stTickBar"] {
+            color: #CFC6A5 !important;
         }
 
         [data-baseweb="tag"] {
@@ -539,7 +554,7 @@ def dashboard_background_image_url() -> str:
     return f"data:{mime_type};base64,{encoded_image}"
 
 
-def render_header(selected_group: str, selected_vessels: list[str], start_date: date, end_date: date) -> None:
+def render_header(selected_group: str, selected_vessels: list[str]) -> None:
     vessel_text = "All selected vessels" if len(selected_vessels) != 1 else selected_vessels[0]
     st.markdown(
         f"""
@@ -547,7 +562,7 @@ def render_header(selected_group: str, selected_vessels: list[str], start_date: 
             <div class="eyebrow">Marorka performance monitoring</div>
             <h1 class="dashboard-title">Magic Noon - Holly Trinity</h1>
             <div class="dashboard-subtitle">
-                {escape(selected_group)} | {escape(vessel_text)} | {start_date.strftime('%d/%m/%Y')} to {end_date.strftime('%d/%m/%Y')} | live API snapshot
+                {escape(selected_group)} | {escape(vessel_text)} | live API snapshot
             </div>
         </div>
         """,
@@ -1319,21 +1334,59 @@ def selected_vessel_controls() -> tuple[str, list[str]]:
 
 
 def sidebar_controls() -> tuple[date, date, str, list[str], bool]:
-    default_start, default_end = default_report_window()
-    st.sidebar.header("Data Window")
-    start_date = st.sidebar.date_input("Start date", value=default_start, format=UI_DATE_INPUT_FORMAT)
-    end_date = st.sidebar.date_input("End date", value=default_end, format=UI_DATE_INPUT_FORMAT)
-
-    if end_date < start_date:
-        st.sidebar.warning("End date must be on or after start date.")
-        st.stop()
+    api_start_date = API_FULL_START_DATE
+    api_end_date = date.today()
 
     st.sidebar.header("Fleet Selection")
     group, vessels = selected_vessel_controls()
 
     refresh = st.sidebar.button("Load / Refresh API data", use_container_width=True)
-    return start_date, end_date, group, vessels, refresh
+    return api_start_date, api_end_date, group, vessels, refresh
 
+
+
+
+
+def render_dashboard_date_slicer(df: pd.DataFrame) -> tuple[pd.DataFrame, date, date]:
+    if df.empty or "StartDateTimeGMT" not in df.columns:
+        today = date.today()
+        return df, today, today
+
+    dates = pd.to_datetime(df["StartDateTimeGMT"], errors="coerce", utc=True).dt.date.dropna()
+    if dates.empty:
+        today = date.today()
+        return df, today, today
+
+    min_date = max(dates.min(), API_FULL_START_DATE)
+    max_date = min(dates.max(), date.today())
+
+    st.markdown('<div class="section-title">Performance Period</div>', unsafe_allow_html=True)
+    st.caption("Drag the handles to choose the time period used by the KPIs and dashboard tables.")
+
+    if min_date >= max_date:
+        st.caption(f"Available data period: {min_date.strftime('%d/%m/%Y')}")
+        selected_start, selected_end = min_date, max_date
+    else:
+        selected_start, selected_end = st.slider(
+            "Timeline slicer",
+            min_value=min_date,
+            max_value=max_date,
+            value=(min_date, max_date),
+            format="DD/MM/YYYY",
+            key="dashboard_timeline_slicer",
+            label_visibility="collapsed",
+        )
+
+    start_timestamp = pd.Timestamp(selected_start, tz="UTC")
+    end_timestamp = pd.Timestamp(selected_end + timedelta(days=1), tz="UTC")
+    date_values = pd.to_datetime(df["StartDateTimeGMT"], errors="coerce", utc=True)
+    filtered_df = df[date_values.ge(start_timestamp) & date_values.lt(end_timestamp)].copy()
+
+    st.caption(
+        f"Selected period: {selected_start.strftime('%d/%m/%Y')} to {selected_end.strftime('%d/%m/%Y')} "
+        f"({len(filtered_df):,} of {len(df):,} reports)"
+    )
+    return filtered_df, selected_start, selected_end
 
 
 # =============================================================================
@@ -1439,7 +1492,7 @@ def main() -> None:
         st.stop()
 
     start_date, end_date, selected_group, selected_vessels, refresh = sidebar_controls()
-    render_header(selected_group, selected_vessels, start_date, end_date)
+    render_header(selected_group, selected_vessels)
 
     raw_signature = request_signature(username, auth_method, start_date)
     current_raw_signature = st.session_state.get("loaded_request_signature")
@@ -1510,10 +1563,18 @@ def main() -> None:
         st.warning("No matching performance report values were returned for the selected fleet/date window.")
         st.stop()
 
+    tab_dashboard, tab_diagnostics, tab_data = st.tabs(["Dashboard", "API Diagnostics", "Dataset"])
+
+    with tab_dashboard:
+        dashboard_df, dashboard_start_date, dashboard_end_date = render_dashboard_date_slicer(df)
+        if dashboard_df.empty:
+            st.warning("No reports match the selected performance period.")
+            st.stop()
+
     with st.sidebar.expander("KPI Filters: Slip / ME Load / SFOC", expanded=False):
         st.caption("These filters affect only Average Calculated Slip, Average ME Load, and Average SFOC.")
         performance_filter_specs = render_excel_like_filters(
-            df,
+            dashboard_df,
             key_prefix="performance_kpi_filter",
             label="Columns to filter",
             default_columns=DEFAULT_PERFORMANCE_FILTER_COLUMNS,
@@ -1524,7 +1585,7 @@ def main() -> None:
     with st.sidebar.expander("KPI Filters: Boiler Sum", expanded=False):
         st.caption("These filters affect only the Boiler Sum KPI.")
         boiler_filter_specs = render_excel_like_filters(
-            df,
+            dashboard_df,
             key_prefix="boiler_kpi_filter",
             label="Columns to filter",
             default_columns=DEFAULT_BOILER_FILTER_COLUMNS,
@@ -1532,25 +1593,23 @@ def main() -> None:
             default_categorical_filters=DEFAULT_BOILER_CATEGORICAL_FILTERS,
         )
 
-    performance_kpi_df = apply_excel_like_filters(df, performance_filter_specs)
-    boiler_kpi_df = apply_excel_like_filters(df, boiler_filter_specs)
-
-    tab_dashboard, tab_diagnostics, tab_data = st.tabs(["Dashboard", "API Diagnostics", "Dataset"])
+    performance_kpi_df = apply_excel_like_filters(dashboard_df, performance_filter_specs)
+    boiler_kpi_df = apply_excel_like_filters(dashboard_df, boiler_filter_specs)
 
     with tab_dashboard:
         st.markdown('<div class="section-title">Fleet KPIs</div>', unsafe_allow_html=True)
         render_kpis(performance_kpi_df, boiler_kpi_df)
-        if len(performance_kpi_df) != len(df) or len(boiler_kpi_df) != len(df):
+        if len(performance_kpi_df) != len(dashboard_df) or len(boiler_kpi_df) != len(dashboard_df):
             st.caption(
-                f"Performance KPI filters use {len(performance_kpi_df):,} of {len(df):,} reports. "
-                f"Boiler KPI filters use {len(boiler_kpi_df):,} of {len(df):,} reports."
+                f"Performance KPI filters use {len(performance_kpi_df):,} of {len(dashboard_df):,} reports. "
+                f"Boiler KPI filters use {len(boiler_kpi_df):,} of {len(dashboard_df):,} reports."
             )
 
         st.markdown('<div class="section-title">Latest Report By Vessel</div>', unsafe_allow_html=True)
-        st.dataframe(make_display_dataframe(latest_by_vessel(df)), use_container_width=True, hide_index=True)
+        st.dataframe(make_display_dataframe(latest_by_vessel(dashboard_df)), use_container_width=True, hide_index=True)
 
         st.markdown('<div class="section-title">Filtered Report Table</div>', unsafe_allow_html=True)
-        display_df = make_display_dataframe(df.sort_values("EndDateTimeGMT", ascending=False))
+        display_df = make_display_dataframe(dashboard_df.sort_values("EndDateTimeGMT", ascending=False))
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
     with tab_diagnostics:
@@ -1559,8 +1618,10 @@ def main() -> None:
             {
                 "Metric": [
                     "Selected vessels",
-                    "Selected start date",
-                    "Selected end date",
+                    "API start date",
+                    "API end date",
+                    "Dashboard selected start",
+                    "Dashboard selected end",
                     "API loaded at",
                     "API loaded from start date",
                     "Transformed reports",
@@ -1574,6 +1635,8 @@ def main() -> None:
                     ", ".join(selected_vessels),
                     start_date.isoformat(),
                     end_date.isoformat(),
+                    dashboard_start_date.isoformat(),
+                    dashboard_end_date.isoformat(),
                     metadata.get("loaded_at_utc", "-"),
                     metadata.get("loaded_start_date", "-"),
                     f"{len(df):,}",
