@@ -326,26 +326,25 @@ def apply_custom_css() -> None:
             border-radius: 14px !important;
         }
 
-                [data-testid="stSlider"] [data-baseweb="slider"] > div {
-            color: #FFD84A !important;
+        div[data-testid="stSlider"] [data-baseweb="slider"] > div > div {
+            background: #FFD84A !important;
         }
 
-        [data-testid="stSlider"] [role="slider"] {
-            background-color: #FFD84A !important;
+        div[data-testid="stSlider"] [role="slider"] {
+            background: #FFD84A !important;
             border: 2px solid #121008 !important;
-            box-shadow: 0 0 0 2px rgba(255, 216, 74, 0.36) !important;
+            box-shadow: 0 0 0 2px rgba(255, 216, 74, 0.22) !important;
         }
 
-        [data-testid="stSlider"] [role="slider"]:focus,
-        [data-testid="stSlider"] [role="slider"]:focus-visible {
-            outline: none !important;
-            box-shadow: 0 0 0 3px rgba(255, 216, 74, 0.42) !important;
+        div[data-testid="stSlider"] [data-baseweb="slider"] {
+            padding-top: 0.4rem;
+            padding-bottom: 0.6rem;
         }
 
-        [data-testid="stSlider"] div[data-testid="stTickBar"] {
-            color: #CFC6A5 !important;
+        div[data-testid="stSlider"] p {
+            color: #FFD84A !important;
+            font-weight: 700 !important;
         }
-
         [data-baseweb="tag"] {
             background: linear-gradient(135deg, rgba(255, 216, 74, 0.22), rgba(255, 176, 0, 0.14)) !important;
             border: 1px solid rgba(255, 216, 74, 0.38) !important;
