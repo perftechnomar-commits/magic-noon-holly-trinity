@@ -296,115 +296,6 @@ def apply_custom_css() -> None:
             border-right: 1px solid var(--border);
         }
 
-        section[data-testid="stSidebdef apply_custom_css() -> None:
-    background_image_url = dashboard_background_image_url()
-    background_image_layer = dashboard_background_image_layer(background_image_url)
-    hero_background = dashboard_hero_background(has_background_image=bool(background_image_url))
-    hero_backdrop_filter = dashboard_hero_backdrop_filter(has_background_image=bool(background_image_url))
-    hero_box_shadow = dashboard_hero_box_shadow(has_background_image=bool(background_image_url))
-    metric_background = dashboard_metric_background(has_background_image=bool(background_image_url))
-    metric_backdrop_filter = dashboard_metric_backdrop_filter(has_background_image=bool(background_image_url))
-    metric_box_shadow = dashboard_metric_box_shadow(has_background_image=bool(background_image_url))
-    st.markdown(
-        """
-        <style>
-        :root {
-            --bg: #050505;
-            --panel: #10100C;
-            --panel-soft: #19170F;
-            --border: rgba(245, 200, 75, 0.24);
-            --text-soft: #B8B29F;
-            --cyan: #FFD84A;
-            --green: #FFB000;
-            --red-muted: rgba(207, 95, 95, 0.24);
-        }
-
-        .stApp {
-            background:
-                __BACKGROUND_IMAGE_LAYER__
-                radial-gradient(circle at top left, rgba(255, 216, 74, 0.13), transparent 34rem),
-                radial-gradient(circle at top right, rgba(255, 176, 0, 0.10), transparent 30rem),
-                linear-gradient(180deg, rgba(255, 216, 74, 0.04), transparent 22rem),
-                var(--bg);
-            background-position: center center;
-            background-size: cover;
-            background-attachment: fixed;
-        }
-
-        header[data-testid="stHeader"] {
-            background: transparent !important;
-            border-bottom: 0 !important;
-            box-shadow: none !important;
-            backdrop-filter: none;
-        }
-
-        header[data-testid="stHeader"] > div {
-            background: transparent !important;
-            border: 0 !important;
-            box-shadow: none !important;
-        }
-
-        div[data-testid="stToolbar"] {
-            background: transparent !important;
-        }
-
-        div[data-testid="stDecoration"] {
-            background: transparent !important;
-            height: 0 !important;
-        }
-
-        div[data-testid="stAlert"],
-        div[data-testid="stAlert"] > div,
-        div[data-testid="stAlert"] [role="alert"],
-        div[data-testid="stAlertContentInfo"],
-        div[data-testid="stAlertContentWarning"],
-        div[data-testid="stAlertContentError"],
-        div[data-testid="stAlertContentSuccess"] {
-            background: transparent !important;
-            background-color: transparent !important;
-            background-image: none !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            box-shadow: none !important;
-            color: #FFFBEA !important;
-            backdrop-filter: none;
-        }
-
-        div[data-testid="stAlert"] {
-            padding-left: 0 !important;
-            padding-right: 0 !important;
-        }
-
-        div[data-testid="stAlert"] * {
-            background: transparent !important;
-            background-color: transparent !important;
-            background-image: none !important;
-            border: 0 !important;
-            box-shadow: none !important;
-        }
-
-        div[data-testid="stAlert"] svg {
-            display: none !important;
-        }
-
-        div[data-testid="stAlert"] div,
-        div[data-testid="stAlert"] p {
-            color: #FFFBEA !important;
-            font-weight: 700 !important;
-            text-shadow: 0 2px 12px rgba(0,0,0,0.92);
-        }
-
-        .block-container {
-            padding-top: 3.2rem;
-            padding-bottom: 3rem;
-            max-width: 1280px;
-        }
-
-        section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #11100A 0%, #050505 100%);
-            border-right: 1px solid var(--border);
-        }
-
         section[data-testid="stSidebar"] > div {
             padding-bottom: 8rem !important;
         }
@@ -665,6 +556,7 @@ def apply_custom_css() -> None:
             color: #121008 !important;
             font-weight: 850 !important;
         }
+
         </style>
         """
         .replace("__BACKGROUND_IMAGE_LAYER__", background_image_layer)
