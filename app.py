@@ -33,6 +33,8 @@ API_CACHE_TTL_SECONDS = 21600  # 6 hours; KPI filters use local data and do not 
 UI_DATE_INPUT_FORMAT = "DD/MM/YYYY"
 DISPLAY_DATETIME_FORMAT = "%d/%m/%Y %H:%M"
 API_FULL_START_DATE = date(2026, 1, 1)
+TABLE_PREVIEW_ROW_LIMIT = 500
+
 
 
 EXCLUDED_REPORT_TYPES = [
@@ -926,10 +928,29 @@ def rows_to_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if "__metadata" in df.columns:
         df = df.drop(columns=["__metadata"])
-    return df
+    for column in SOURCE_COLUMNS:
+        if column not in df.columns:
+            df[column] = pd.NA
+    return df[SOURCE_COLUMNS]
 
 
-@st.cache_data(ttl=API_CACHE_TTL_SECONDS, show_spinner=False)
+def compact_odata_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    wanted_keys = wanted_value_keys()
+    compact_rows: list[dict[str, Any]] = []
+
+    for row in rows:
+        value_description = row.get("ValueDescription")
+        if value_description is None:
+            continue
+        if normalize_text(value_description) not in wanted_keys:
+            continue
+        if row.get("ReportType") in EXCLUDED_REPORT_TYPES:
+            continue
+        compact_rows.append({column: row.get(column) for column in SOURCE_COLUMNS})
+
+    return compact_rows
+
+
 def fetch_report_data(
     username: str,
     password: str,
@@ -939,10 +960,11 @@ def fetch_report_data(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     started_at = time.perf_counter()
     next_url = build_odata_url(start_date)
-    all_rows: list[dict[str, Any]] = []
+    kept_rows: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
     pages = 0
     total_bytes = 0
+    scanned_rows = 0
     first_url = next_url
     auth = request_auth(username, password, auth_method)
     headers = request_headers(token, auth_method)
@@ -964,21 +986,25 @@ def fetch_report_data(
             pages += 1
 
             page_rows, next_link = extract_odata_page(response.json())
-            all_rows.extend(page_rows)
+            scanned_rows += len(page_rows)
+            kept_rows.extend(compact_odata_rows(page_rows))
 
             if not next_link:
                 break
             next_url = urljoin(next_url, next_link)
 
     metadata = {
-        "rows": len(all_rows),
+        "rows": len(kept_rows),
+        "kept_rows": len(kept_rows),
+        "scanned_rows": scanned_rows,
+        "discarded_rows": max(scanned_rows - len(kept_rows), 0),
         "pages": pages,
         "downloaded_mb": round(total_bytes / 1024 / 1024, 2),
         "fetch_seconds": round(time.perf_counter() - started_at, 2),
         "first_url": first_url,
         "hit_page_limit": pages >= MAX_ODATA_PAGES,
     }
-    return rows_to_dataframe(all_rows), metadata
+    return rows_to_dataframe(kept_rows), metadata
 
 
 # =============================================================================
@@ -1135,12 +1161,7 @@ def build_report_rows(df: pd.DataFrame) -> pd.DataFrame:
     return report_df
 
 
-def transform_report_data(
-    raw_df: pd.DataFrame,
-    selected_vessels: list[str],
-    start_date: date,
-    end_date: date,
-) -> pd.DataFrame:
+def transform_report_data(raw_df: pd.DataFrame) -> pd.DataFrame:
     missing_columns = sorted(set(SOURCE_COLUMNS).difference(raw_df.columns))
     if missing_columns:
         raise ValueError(f"Missing expected API columns: {', '.join(missing_columns)}")
@@ -1153,16 +1174,10 @@ def transform_report_data(
     df["_value_key"] = df["ValueDescription"].map(normalize_text)
     df["_source_order"] = range(len(df))
 
-    start_timestamp = pd.Timestamp(start_date, tz="UTC")
-    end_timestamp = pd.Timestamp(end_date + timedelta(days=1), tz="UTC")
-
     df = df[
         df["ValueDescription"].notna()
         & df["_value_key"].isin(wanted_value_keys())
         & ~df["ReportType"].isin(EXCLUDED_REPORT_TYPES)
-        & match_selected_vessels(df["ShipName"], selected_vessels)
-        & df["StartDateTimeGMT"].ge(start_timestamp)
-        & df["StartDateTimeGMT"].lt(end_timestamp)
     ].copy()
 
     if df.empty:
@@ -1175,6 +1190,28 @@ def transform_report_data(
     report_df = report_df.sort_values(["ShipName", "EndDateTimeGMT", "ReportId"], na_position="last")
     report_df = add_calculations(report_df)
     return report_df
+
+
+def filter_reports_for_selection(
+    report_df: pd.DataFrame,
+    selected_vessels: list[str],
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    if report_df.empty:
+        return report_df
+
+    filtered = report_df.copy()
+    start_timestamp = pd.Timestamp(start_date, tz="UTC")
+    end_timestamp = pd.Timestamp(end_date + timedelta(days=1), tz="UTC")
+    start_values = pd.to_datetime(filtered["StartDateTimeGMT"], errors="coerce", utc=True)
+
+    filtered = filtered[
+        match_selected_vessels(filtered["ShipName"], selected_vessels)
+        & start_values.ge(start_timestamp)
+        & start_values.lt(end_timestamp)
+    ].copy()
+    return filtered
 
 
 def add_calculations(report_df: pd.DataFrame) -> pd.DataFrame:
@@ -1641,7 +1678,14 @@ def request_signature(
     }
 
 
-def transform_signature(
+def transform_signature(raw_signature: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **raw_signature,
+        "value_signature": sha256("|".join(VALUE_ALIASES.keys()).encode("utf-8")).hexdigest()[:12],
+    }
+
+
+def view_signature(
     raw_signature: dict[str, Any],
     selected_vessels: list[str],
     start_date: date,
@@ -1650,6 +1694,7 @@ def transform_signature(
     return {
         **raw_signature,
         "selected_vessels": tuple(selected_vessels),
+        "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
         "value_signature": sha256("|".join(VALUE_ALIASES.keys()).encode("utf-8")).hexdigest()[:12],
     }
@@ -1748,8 +1793,7 @@ def main() -> None:
             st.stop()
 
         try:
-            fetch_report_data.clear()
-            with st.spinner("Loading Marorka report data..."):
+            with st.spinner("Loading compact Marorka report data..."):
                 raw_df, metadata = fetch_report_data(
                     username=username,
                     password=password,
@@ -1770,9 +1814,9 @@ def main() -> None:
             st.error(str(exc))
             st.stop()
 
-    transform_sig = transform_signature(raw_signature, selected_vessels, start_date, end_date)
+    transform_sig = transform_signature(raw_signature)
     current_transform_sig = st.session_state.get("loaded_transform_signature")
-    df = st.session_state.get("loaded_transformed_df")
+    all_df = st.session_state.get("loaded_transformed_df")
     metadata = st.session_state.get("loaded_metadata")
     raw_df = st.session_state.get("loaded_raw_df")
 
@@ -1780,11 +1824,11 @@ def main() -> None:
         st.info("Click **Load / Refresh API data** to load the selected report window.")
         st.stop()
 
-    if df is None or current_transform_sig != transform_sig:
+    if all_df is None or current_transform_sig != transform_sig:
         try:
             transform_started_at = time.perf_counter()
-            df = transform_report_data(raw_df, selected_vessels, start_date, end_date)
-            set_loaded_transform_state(df, transform_sig)
+            all_df = transform_report_data(raw_df)
+            set_loaded_transform_state(all_df, transform_sig)
             metadata = st.session_state.get("loaded_metadata")
             if isinstance(metadata, dict):
                 metadata["transform_seconds"] = round(time.perf_counter() - transform_started_at, 2)
@@ -1793,11 +1837,20 @@ def main() -> None:
             st.error(str(exc))
             st.stop()
 
+    view_sig = view_signature(raw_signature, selected_vessels, start_date, end_date)
+    df = filter_reports_for_selection(all_df, selected_vessels, start_date, end_date)
+
     if df.empty:
         st.warning("No matching performance report values were returned for the selected fleet/date window.")
         st.stop()
 
     tab_dashboard, tab_diagnostics, tab_data = st.tabs(["Dashboard", "API Diagnostics", "Dataset"])
+
+    if metadata.get("hit_page_limit"):
+        st.warning(
+            "The API refresh reached the page safety limit. The loaded dataset may be incomplete. "
+            "Check API Diagnostics before using the report."
+        )
 
     with tab_dashboard:
         dashboard_df, dashboard_start_date, dashboard_end_date = render_dashboard_date_slicer(df)
@@ -1843,8 +1896,15 @@ def main() -> None:
         st.dataframe(make_display_dataframe(latest_by_vessel(dashboard_df)), use_container_width=True, hide_index=True)
 
         st.markdown('<div class="section-title">Filtered Report Table</div>', unsafe_allow_html=True)
-        display_df = make_display_dataframe(dashboard_df.sort_values("EndDateTimeGMT", ascending=False))
+        sorted_dashboard_df = dashboard_df.sort_values("EndDateTimeGMT", ascending=False)
+        preview_dashboard_df = sorted_dashboard_df.head(TABLE_PREVIEW_ROW_LIMIT)
+        display_df = make_display_dataframe(preview_dashboard_df)
         st.dataframe(display_df, use_container_width=True, hide_index=True)
+        if len(sorted_dashboard_df) > TABLE_PREVIEW_ROW_LIMIT:
+            st.caption(
+                f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(sorted_dashboard_df):,} rows. "
+                "Use the Dataset tab and Excel export for the full selected dataset."
+            )
 
     with tab_diagnostics:
         st.markdown('<div class="section-title">Diagnostics</div>', unsafe_allow_html=True)
@@ -1858,12 +1918,16 @@ def main() -> None:
                     "Dashboard selected end",
                     "API loaded at",
                     "API loaded from start date",
-                    "Transformed reports",
-                    "Raw API rows",
+                    "Selected-vessel reports",
+                    "All-vessel transformed reports",
+                    "Kept compact raw rows",
+                    "Original API rows scanned",
+                    "Discarded irrelevant rows",
                     "API pages",
                     "Downloaded MB",
                     "API fetch seconds",
                     "Transform seconds",
+                    "Hit API page limit",
                 ],
                 "Value": [
                     ", ".join(selected_vessels),
@@ -1874,11 +1938,15 @@ def main() -> None:
                     metadata.get("loaded_at_utc", "-"),
                     metadata.get("loaded_start_date", "-"),
                     f"{len(df):,}",
-                    f"{metadata['rows']:,}",
+                    f"{len(all_df):,}",
+                    f"{metadata.get('kept_rows', metadata.get('rows', 0)):,}",
+                    f"{metadata.get('scanned_rows', 0):,}",
+                    f"{metadata.get('discarded_rows', 0):,}",
                     f"{metadata['pages']:,}",
                     metadata["downloaded_mb"],
                     metadata.get("fetch_seconds", "-"),
                     metadata.get("transform_seconds", "-"),
+                    str(metadata.get("hit_page_limit", "-")),
                 ],
             }
         )
@@ -1887,10 +1955,10 @@ def main() -> None:
         with st.expander("First API URL", expanded=False):
             st.code(metadata.get("first_url", "-"), language="text")
 
-        st.markdown('<div class="section-title">Raw ValueDescription Counts</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title">Compact Raw ValueDescription Counts</div>', unsafe_allow_html=True)
         if st.button("Calculate raw value counts"):
             value_counts = raw_df.get("ValueDescription", pd.Series(dtype="object")).value_counts(dropna=False).reset_index()
-            value_counts.columns = ["ValueDescription", "Raw rows"]
+            value_counts.columns = ["ValueDescription", "Compact raw rows"]
             st.dataframe(value_counts.head(200), use_container_width=True, hide_index=True)
         else:
             st.caption("Raw value counts are calculated on demand so diagnostics do not slow normal loads.")
@@ -1898,14 +1966,14 @@ def main() -> None:
     with tab_data:
         export_df = df.sort_values(["ShipName", "EndDateTimeGMT"], ascending=[True, False])
         export_ready = (
-            st.session_state.get("fleet_export_signature") == transform_sig
+            st.session_state.get("fleet_export_signature") == view_sig
             and "fleet_export_bytes" in st.session_state
         )
 
         if st.button("Prepare Excel download", type="primary"):
             with st.spinner("Preparing Excel file..."):
                 st.session_state["fleet_export_bytes"] = to_excel_bytes(export_df)
-                st.session_state["fleet_export_signature"] = transform_sig
+                st.session_state["fleet_export_signature"] = view_sig
             export_ready = True
 
         if export_ready:
@@ -1918,7 +1986,13 @@ def main() -> None:
         else:
             st.caption("Excel generation is prepared on demand so normal dashboard loads stay faster.")
 
-        st.dataframe(make_display_dataframe(export_df), use_container_width=True, hide_index=True)
+        preview_export_df = export_df.head(TABLE_PREVIEW_ROW_LIMIT)
+        st.dataframe(make_display_dataframe(preview_export_df), use_container_width=True, hide_index=True)
+        if len(export_df) > TABLE_PREVIEW_ROW_LIMIT:
+            st.caption(
+                f"Showing first {TABLE_PREVIEW_ROW_LIMIT:,} of {len(export_df):,} selected rows. "
+                "The Excel download includes the full selected dataset."
+            )
 
 
 if __name__ == "__main__":
