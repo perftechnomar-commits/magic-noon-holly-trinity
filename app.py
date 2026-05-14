@@ -296,6 +296,115 @@ def apply_custom_css() -> None:
             border-right: 1px solid var(--border);
         }
 
+        section[data-testid="stSidebdef apply_custom_css() -> None:
+    background_image_url = dashboard_background_image_url()
+    background_image_layer = dashboard_background_image_layer(background_image_url)
+    hero_background = dashboard_hero_background(has_background_image=bool(background_image_url))
+    hero_backdrop_filter = dashboard_hero_backdrop_filter(has_background_image=bool(background_image_url))
+    hero_box_shadow = dashboard_hero_box_shadow(has_background_image=bool(background_image_url))
+    metric_background = dashboard_metric_background(has_background_image=bool(background_image_url))
+    metric_backdrop_filter = dashboard_metric_backdrop_filter(has_background_image=bool(background_image_url))
+    metric_box_shadow = dashboard_metric_box_shadow(has_background_image=bool(background_image_url))
+    st.markdown(
+        """
+        <style>
+        :root {
+            --bg: #050505;
+            --panel: #10100C;
+            --panel-soft: #19170F;
+            --border: rgba(245, 200, 75, 0.24);
+            --text-soft: #B8B29F;
+            --cyan: #FFD84A;
+            --green: #FFB000;
+            --red-muted: rgba(207, 95, 95, 0.24);
+        }
+
+        .stApp {
+            background:
+                __BACKGROUND_IMAGE_LAYER__
+                radial-gradient(circle at top left, rgba(255, 216, 74, 0.13), transparent 34rem),
+                radial-gradient(circle at top right, rgba(255, 176, 0, 0.10), transparent 30rem),
+                linear-gradient(180deg, rgba(255, 216, 74, 0.04), transparent 22rem),
+                var(--bg);
+            background-position: center center;
+            background-size: cover;
+            background-attachment: fixed;
+        }
+
+        header[data-testid="stHeader"] {
+            background: transparent !important;
+            border-bottom: 0 !important;
+            box-shadow: none !important;
+            backdrop-filter: none;
+        }
+
+        header[data-testid="stHeader"] > div {
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+        }
+
+        div[data-testid="stToolbar"] {
+            background: transparent !important;
+        }
+
+        div[data-testid="stDecoration"] {
+            background: transparent !important;
+            height: 0 !important;
+        }
+
+        div[data-testid="stAlert"],
+        div[data-testid="stAlert"] > div,
+        div[data-testid="stAlert"] [role="alert"],
+        div[data-testid="stAlertContentInfo"],
+        div[data-testid="stAlertContentWarning"],
+        div[data-testid="stAlertContentError"],
+        div[data-testid="stAlertContentSuccess"] {
+            background: transparent !important;
+            background-color: transparent !important;
+            background-image: none !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            color: #FFFBEA !important;
+            backdrop-filter: none;
+        }
+
+        div[data-testid="stAlert"] {
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+        }
+
+        div[data-testid="stAlert"] * {
+            background: transparent !important;
+            background-color: transparent !important;
+            background-image: none !important;
+            border: 0 !important;
+            box-shadow: none !important;
+        }
+
+        div[data-testid="stAlert"] svg {
+            display: none !important;
+        }
+
+        div[data-testid="stAlert"] div,
+        div[data-testid="stAlert"] p {
+            color: #FFFBEA !important;
+            font-weight: 700 !important;
+            text-shadow: 0 2px 12px rgba(0,0,0,0.92);
+        }
+
+        .block-container {
+            padding-top: 3.2rem;
+            padding-bottom: 3rem;
+            max-width: 1280px;
+        }
+
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #11100A 0%, #050505 100%);
+            border-right: 1px solid var(--border);
+        }
+
         section[data-testid="stSidebar"] > div {
             padding-bottom: 8rem !important;
         }
@@ -317,65 +426,94 @@ def apply_custom_css() -> None:
             font-weight: 700 !important;
         }
 
-        /* Inputs: calm by default, gold only when the user focuses/clicks. */
+        /* Inputs: calm by default; one homogeneous gold outline only on focus. */
         div[data-baseweb="select"] > div,
-        div[data-baseweb="input"] > div,
-        [data-testid="stTextInput"] input,
-        [data-testid="stDateInput"] input {
+        div[data-baseweb="input"] > div {
             background-color: rgba(13, 13, 9, 0.88) !important;
             border: 1px solid rgba(255, 216, 74, 0.16) !important;
             border-radius: 14px !important;
             box-shadow: none !important;
             outline: none !important;
+            overflow: hidden !important;
             transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease !important;
         }
 
+        /* Keep the actual inner input flat so BaseWeb does not draw a second rectangle. */
+        div[data-baseweb="input"] input,
+        [data-testid="stTextInput"] input,
+        [data-testid="stDateInput"] input,
+        textarea {
+            background: transparent !important;
+            background-color: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+            caret-color: #FFD84A !important;
+        }
+
         div[data-baseweb="select"] > div:hover,
-        div[data-baseweb="input"] > div:hover,
-        [data-testid="stTextInput"] input:hover,
-        [data-testid="stDateInput"] input:hover {
+        div[data-baseweb="input"] > div:hover {
             border-color: rgba(255, 216, 74, 0.24) !important;
             box-shadow: none !important;
         }
 
         div[data-baseweb="select"] > div:focus-within,
         div[data-baseweb="input"] > div:focus-within,
-        div[data-baseweb="input"]:focus-within > div,
-        [data-testid="stTextInput"] div:focus-within,
-        [data-testid="stDateInput"] div:focus-within {
-            border-color: rgba(255, 216, 74, 0.82) !important;
-            box-shadow:
-                0 0 0 1px rgba(255, 216, 74, 0.62),
-                0 0 0 3px rgba(255, 216, 74, 0.10) !important;
+        div[data-baseweb="input"]:focus-within > div {
+            border-color: rgba(255, 216, 74, 0.88) !important;
+            box-shadow: 0 0 0 1px rgba(255, 216, 74, 0.64) !important;
             outline: none !important;
         }
 
-        div[data-baseweb="input"] input,
         div[data-baseweb="input"] input:focus,
         div[data-baseweb="input"] input:focus-visible,
-        [data-testid="stTextInput"] input,
         [data-testid="stTextInput"] input:focus,
         [data-testid="stTextInput"] input:focus-visible,
-        [data-testid="stDateInput"] input,
         [data-testid="stDateInput"] input:focus,
         [data-testid="stDateInput"] input:focus-visible,
-        textarea,
         textarea:focus,
         textarea:focus-visible {
+            border: 0 !important;
             outline: none !important;
             box-shadow: none !important;
-            caret-color: #FFD84A !important;
         }
 
-        /* Suppress Streamlit/BaseWeb red/orange validation rings without making
-           unfocused inputs look selected. */
+        /* Make the password-eye/button area part of the same input surface. */
+        div[data-baseweb="input"] button,
+        [data-testid="stTextInput"] button,
+        div[data-baseweb="input"] [role="button"],
+        [data-testid="stTextInput"] [role="button"] {
+            background: transparent !important;
+            background-color: transparent !important;
+            border: 0 !important;
+            border-left: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+            color: #FFF7CC !important;
+        }
+
+        div[data-baseweb="input"] button:focus,
+        div[data-baseweb="input"] button:focus-visible,
+        [data-testid="stTextInput"] button:focus,
+        [data-testid="stTextInput"] button:focus-visible,
+        div[data-baseweb="input"] [role="button"]:focus,
+        div[data-baseweb="input"] [role="button"]:focus-visible,
+        [data-testid="stTextInput"] [role="button"]:focus,
+        [data-testid="stTextInput"] [role="button"]:focus-visible {
+            border: 0 !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Suppress Streamlit/BaseWeb validation rings without adding a second outline. */
         div[data-baseweb="input"] > div[aria-invalid="true"],
         div[data-baseweb="input"][aria-invalid="true"] > div,
         div[data-baseweb="input"] > div[data-invalid="true"],
         div[data-baseweb="input"][data-invalid="true"] > div,
         [data-testid="stTextInput"] [aria-invalid="true"],
         [data-testid="stDateInput"] [aria-invalid="true"] {
-            border-color: rgba(255, 216, 74, 0.24) !important;
+            border-color: rgba(255, 216, 74, 0.18) !important;
             box-shadow: none !important;
             outline: none !important;
         }
@@ -386,10 +524,9 @@ def apply_custom_css() -> None:
         div[data-baseweb="input"][data-invalid="true"] > div:focus-within,
         [data-testid="stTextInput"] [aria-invalid="true"]:focus-within,
         [data-testid="stDateInput"] [aria-invalid="true"]:focus-within {
-            border-color: rgba(255, 216, 74, 0.82) !important;
-            box-shadow:
-                0 0 0 1px rgba(255, 216, 74, 0.62),
-                0 0 0 3px rgba(255, 216, 74, 0.10) !important;
+            border-color: rgba(255, 216, 74, 0.88) !important;
+            box-shadow: 0 0 0 1px rgba(255, 216, 74, 0.64) !important;
+            outline: none !important;
         }
 
         div[data-baseweb="input"],
@@ -399,19 +536,14 @@ def apply_custom_css() -> None:
         [data-testid="stDateInput"],
         [data-testid="stDateInput"] * {
             --focus-color: #FFD84A !important;
-            --input-border-color: rgba(255, 216, 74, 0.24) !important;
+            --input-border-color: rgba(255, 216, 74, 0.18) !important;
             --error-color: #FFD84A !important;
-            outline-color: #FFD84A !important;
+            outline-color: transparent !important;
         }
 
         div[data-baseweb="input"] svg,
-        div[data-baseweb="input"] button,
-        [data-testid="stTextInput"] svg,
-        [data-testid="stTextInput"] button {
+        [data-testid="stTextInput"] svg {
             color: #FFF7CC !important;
-            border-color: rgba(255, 216, 74, 0.22) !important;
-            outline: 0 !important;
-            box-shadow: none !important;
         }
 
         [data-baseweb="tag"] {
@@ -533,7 +665,6 @@ def apply_custom_css() -> None:
             color: #121008 !important;
             font-weight: 850 !important;
         }
-
         </style>
         """
         .replace("__BACKGROUND_IMAGE_LAYER__", background_image_layer)
