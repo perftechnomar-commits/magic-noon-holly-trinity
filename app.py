@@ -317,7 +317,7 @@ def apply_custom_css() -> None:
             font-weight: 700 !important;
         }
 
-        /* Inputs: subtle by default; a single homogeneous gold outline only on focus. */
+        /* Inputs: calm by default; one homogeneous gold outline only on focus. */
         div[data-baseweb="select"] > div,
         div[data-baseweb="input"] > div {
             background-color: rgba(13, 13, 9, 0.88) !important;
@@ -326,43 +326,14 @@ def apply_custom_css() -> None:
             box-shadow: none !important;
             outline: none !important;
             overflow: hidden !important;
-            transition: border-color 140ms ease, background-color 140ms ease !important;
+            transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease !important;
         }
 
-        div[data-baseweb="select"] > div:hover,
-        div[data-baseweb="input"] > div:hover {
-            border-color: rgba(255, 216, 74, 0.24) !important;
-            box-shadow: none !important;
-            outline: none !important;
-        }
-
-        /* The outer BaseWeb shell is the only element allowed to draw a focus border. */
-        div[data-baseweb="select"] > div:focus-within,
-        div[data-baseweb="input"] > div:focus-within,
-        div[data-baseweb="input"]:focus-within > div {
-            background-color: rgba(13, 13, 9, 0.94) !important;
-            border: 1px solid rgba(255, 216, 74, 0.92) !important;
-            box-shadow: none !important;
-            outline: none !important;
-        }
-
-        /* Keep the actual editable control flat, so no second rectangle appears. */
+        /* Keep the actual inner input flat so BaseWeb does not draw a second rectangle. */
         div[data-baseweb="input"] input,
-        div[data-baseweb="input"] input:hover,
-        div[data-baseweb="input"] input:focus,
-        div[data-baseweb="input"] input:focus-visible,
         [data-testid="stTextInput"] input,
-        [data-testid="stTextInput"] input:hover,
-        [data-testid="stTextInput"] input:focus,
-        [data-testid="stTextInput"] input:focus-visible,
         [data-testid="stDateInput"] input,
-        [data-testid="stDateInput"] input:hover,
-        [data-testid="stDateInput"] input:focus,
-        [data-testid="stDateInput"] input:focus-visible,
-        textarea,
-        textarea:hover,
-        textarea:focus,
-        textarea:focus-visible {
+        textarea {
             background: transparent !important;
             background-color: transparent !important;
             border: 0 !important;
@@ -371,23 +342,38 @@ def apply_custom_css() -> None:
             caret-color: #FFD84A !important;
         }
 
-        /* Make the password eye part of the same input surface, with no separate pill/outline. */
+        div[data-baseweb="select"] > div:hover,
+        div[data-baseweb="input"] > div:hover {
+            border-color: rgba(255, 216, 74, 0.24) !important;
+            box-shadow: none !important;
+        }
+
+        div[data-baseweb="select"] > div:focus-within,
+        div[data-baseweb="input"] > div:focus-within,
+        div[data-baseweb="input"]:focus-within > div {
+            border-color: rgba(255, 216, 74, 0.88) !important;
+            box-shadow: 0 0 0 1px rgba(255, 216, 74, 0.64) !important;
+            outline: none !important;
+        }
+
+        div[data-baseweb="input"] input:focus,
+        div[data-baseweb="input"] input:focus-visible,
+        [data-testid="stTextInput"] input:focus,
+        [data-testid="stTextInput"] input:focus-visible,
+        [data-testid="stDateInput"] input:focus,
+        [data-testid="stDateInput"] input:focus-visible,
+        textarea:focus,
+        textarea:focus-visible {
+            border: 0 !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Make the password-eye/button area part of the same input surface. */
         div[data-baseweb="input"] button,
-        div[data-baseweb="input"] button:hover,
-        div[data-baseweb="input"] button:focus,
-        div[data-baseweb="input"] button:focus-visible,
         [data-testid="stTextInput"] button,
-        [data-testid="stTextInput"] button:hover,
-        [data-testid="stTextInput"] button:focus,
-        [data-testid="stTextInput"] button:focus-visible,
         div[data-baseweb="input"] [role="button"],
-        div[data-baseweb="input"] [role="button"]:hover,
-        div[data-baseweb="input"] [role="button"]:focus,
-        div[data-baseweb="input"] [role="button"]:focus-visible,
-        [data-testid="stTextInput"] [role="button"],
-        [data-testid="stTextInput"] [role="button"]:hover,
-        [data-testid="stTextInput"] [role="button"]:focus,
-        [data-testid="stTextInput"] [role="button"]:focus-visible {
+        [data-testid="stTextInput"] [role="button"] {
             background: transparent !important;
             background-color: transparent !important;
             border: 0 !important;
@@ -398,14 +384,27 @@ def apply_custom_css() -> None:
             color: #FFF7CC !important;
         }
 
-        /* Streamlit/BaseWeb invalid and autofill states should not add red/orange or extra rings. */
+        div[data-baseweb="input"] button:focus,
+        div[data-baseweb="input"] button:focus-visible,
+        [data-testid="stTextInput"] button:focus,
+        [data-testid="stTextInput"] button:focus-visible,
+        div[data-baseweb="input"] [role="button"]:focus,
+        div[data-baseweb="input"] [role="button"]:focus-visible,
+        [data-testid="stTextInput"] [role="button"]:focus,
+        [data-testid="stTextInput"] [role="button"]:focus-visible {
+            border: 0 !important;
+            outline: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Suppress Streamlit/BaseWeb validation rings without adding a second outline. */
         div[data-baseweb="input"] > div[aria-invalid="true"],
         div[data-baseweb="input"][aria-invalid="true"] > div,
         div[data-baseweb="input"] > div[data-invalid="true"],
         div[data-baseweb="input"][data-invalid="true"] > div,
         [data-testid="stTextInput"] [aria-invalid="true"],
         [data-testid="stDateInput"] [aria-invalid="true"] {
-            border-color: rgba(255, 216, 74, 0.16) !important;
+            border-color: rgba(255, 216, 74, 0.18) !important;
             box-shadow: none !important;
             outline: none !important;
         }
@@ -416,20 +415,21 @@ def apply_custom_css() -> None:
         div[data-baseweb="input"][data-invalid="true"] > div:focus-within,
         [data-testid="stTextInput"] [aria-invalid="true"]:focus-within,
         [data-testid="stDateInput"] [aria-invalid="true"]:focus-within {
-            border-color: rgba(255, 216, 74, 0.92) !important;
-            box-shadow: none !important;
+            border-color: rgba(255, 216, 74, 0.88) !important;
+            box-shadow: 0 0 0 1px rgba(255, 216, 74, 0.64) !important;
             outline: none !important;
         }
 
+        div[data-baseweb="input"],
         div[data-baseweb="input"] *,
-        div[data-baseweb="select"] *,
+        [data-testid="stTextInput"],
         [data-testid="stTextInput"] *,
+        [data-testid="stDateInput"],
         [data-testid="stDateInput"] * {
             --focus-color: #FFD84A !important;
-            --input-border-color: rgba(255, 216, 74, 0.16) !important;
+            --input-border-color: rgba(255, 216, 74, 0.18) !important;
             --error-color: #FFD84A !important;
             outline-color: transparent !important;
-            box-shadow: none !important;
         }
 
         div[data-baseweb="input"] svg,
@@ -555,6 +555,133 @@ def apply_custom_css() -> None:
             background: linear-gradient(135deg, rgba(255, 216, 74, 0.98), rgba(255, 176, 0, 0.86)) !important;
             color: #121008 !important;
             font-weight: 850 !important;
+        }
+
+
+        /* Final unified input styling: one calm surface, one yellow focus line, no orange/red rings. */
+        :root {
+            --mn-input-bg: rgba(13, 13, 9, 0.90);
+            --mn-input-border: rgba(255, 216, 74, 0.18);
+            --mn-input-border-hover: rgba(255, 216, 74, 0.28);
+            --mn-input-border-focus: rgba(255, 216, 74, 0.92);
+        }
+
+        /* Put the single visible border on the BaseWeb input shell. */
+        div[data-baseweb="input"],
+        [data-testid="stTextInput"] div[data-baseweb="input"],
+        [data-testid="stDateInput"] div[data-baseweb="input"],
+        [data-testid="stNumberInput"] div[data-baseweb="input"] {
+            background: var(--mn-input-bg) !important;
+            background-color: var(--mn-input-bg) !important;
+            border: 1px solid var(--mn-input-border) !important;
+            border-radius: 14px !important;
+            box-shadow: none !important;
+            outline: none !important;
+            overflow: hidden !important;
+            transition: border-color 140ms ease, background-color 140ms ease !important;
+        }
+
+        div[data-baseweb="input"]:hover,
+        [data-testid="stTextInput"] div[data-baseweb="input"]:hover,
+        [data-testid="stDateInput"] div[data-baseweb="input"]:hover,
+        [data-testid="stNumberInput"] div[data-baseweb="input"]:hover {
+            border-color: var(--mn-input-border-hover) !important;
+            box-shadow: none !important;
+        }
+
+        div[data-baseweb="input"]:focus-within,
+        div[data-baseweb="input"]:has(input:focus),
+        div[data-baseweb="input"]:has(input:focus-visible),
+        [data-testid="stTextInput"] div[data-baseweb="input"]:focus-within,
+        [data-testid="stDateInput"] div[data-baseweb="input"]:focus-within,
+        [data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within {
+            border-color: var(--mn-input-border-focus) !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+
+        /* Remove every inner rectangle so the field reads as one homogeneous tab. */
+        div[data-baseweb="input"] > div,
+        div[data-baseweb="input"] > div > div,
+        div[data-baseweb="input"] > div > div > div,
+        div[data-baseweb="input"] [data-baseweb="base-input"],
+        div[data-baseweb="input"] [data-testid="stBaseInput"],
+        [data-testid="stTextInput"] div[data-baseweb="input"] > div,
+        [data-testid="stDateInput"] div[data-baseweb="input"] > div,
+        [data-testid="stNumberInput"] div[data-baseweb="input"] > div {
+            background: transparent !important;
+            background-color: transparent !important;
+            border: 0 !important;
+            border-color: transparent !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+
+        div[data-baseweb="input"] input,
+        div[data-baseweb="input"] input:hover,
+        div[data-baseweb="input"] input:focus,
+        div[data-baseweb="input"] input:focus-visible,
+        div[data-baseweb="input"] input:invalid,
+        div[data-baseweb="input"] input:user-invalid,
+        [data-testid="stTextInput"] input,
+        [data-testid="stDateInput"] input,
+        [data-testid="stNumberInput"] input {
+            background: transparent !important;
+            background-color: transparent !important;
+            border: 0 !important;
+            border-color: transparent !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+            caret-color: #FFD84A !important;
+        }
+
+        /* Make the password eye area the same surface as the input; no black patch and no separate outline. */
+        div[data-baseweb="input"] button,
+        div[data-baseweb="input"] button:hover,
+        div[data-baseweb="input"] button:focus,
+        div[data-baseweb="input"] button:focus-visible,
+        div[data-baseweb="input"] [role="button"],
+        div[data-baseweb="input"] [role="button"]:hover,
+        div[data-baseweb="input"] [role="button"]:focus,
+        div[data-baseweb="input"] [role="button"]:focus-visible,
+        div[data-baseweb="input"] svg,
+        [data-testid="stTextInput"] button,
+        [data-testid="stTextInput"] [role="button"] {
+            background: transparent !important;
+            background-color: transparent !important;
+            border: 0 !important;
+            border-left: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            outline: none !important;
+            color: #FFF7CC !important;
+        }
+
+        /* Streamlit/BaseWeb invalid states sometimes inject orange/red borders; force them back to theme. */
+        div[data-baseweb="input"][aria-invalid="true"],
+        div[data-baseweb="input"][data-invalid="true"],
+        div[data-baseweb="input"]:has(input[aria-invalid="true"]),
+        div[data-baseweb="input"]:has(input:invalid),
+        [data-testid="stTextInput"] div[aria-invalid="true"],
+        [data-testid="stDateInput"] div[aria-invalid="true"],
+        [data-testid="stNumberInput"] div[aria-invalid="true"] {
+            border-color: var(--mn-input-border) !important;
+            box-shadow: none !important;
+            outline: none !important;
+        }
+
+        div[data-baseweb="input"][aria-invalid="true"]:focus-within,
+        div[data-baseweb="input"][data-invalid="true"]:focus-within,
+        div[data-baseweb="input"]:has(input[aria-invalid="true"]:focus),
+        div[data-baseweb="input"]:has(input:invalid:focus),
+        [data-testid="stTextInput"] div[aria-invalid="true"]:focus-within,
+        [data-testid="stDateInput"] div[aria-invalid="true"]:focus-within,
+        [data-testid="stNumberInput"] div[aria-invalid="true"]:focus-within {
+            border-color: var(--mn-input-border-focus) !important;
+            box-shadow: none !important;
+            outline: none !important;
         }
 
         </style>
