@@ -1359,10 +1359,8 @@ def to_kpi_excel_bytes(
     selected_vessels: list[str],
     selected_start: date,
     selected_end: date,
-    slip: Any,
-    me_load: Any,
-    sfoc: Any,
-    boiler: Any,
+    performance_kpi_df: pd.DataFrame,
+    boiler_kpi_df: pd.DataFrame,
     performance_filter_specs: list[dict[str, Any]],
     boiler_filter_specs: list[dict[str, Any]],
 ) -> bytes:
@@ -1375,28 +1373,36 @@ def to_kpi_excel_bytes(
     else:
         report_title = selected_group
 
-    show_vessel_list = selected_group not in {"All fleets", "Single vessel"}
-    table_start_row = 6 if show_vessel_list else 4
+    def vessel_mask(df: pd.DataFrame, vessel: str) -> pd.Series:
+        if df.empty or "ShipName" not in df.columns:
+            return pd.Series(False, index=df.index)
+        return match_selected_vessels(df["ShipName"], [vessel])
 
-    kpi_df = pd.DataFrame(
-        {
-            "KPI": [
-                "Average Calculated Slip",
-                "Average ME Load [%MCR]",
-                "Average SFOC [gr/Kwh]",
-                "Boiler Sum",
-            ],
-            "Value": [
-                format_percentage(slip),
-                format_percentage(me_load),
-                format_value(sfoc, 2),
-                format_value(boiler, 2),
-            ],
-        }
-    )
+    rows: list[dict[str, str]] = []
+    for vessel in selected_vessels:
+        vessel_performance_df = performance_kpi_df.loc[vessel_mask(performance_kpi_df, vessel)]
+        vessel_boiler_df = boiler_kpi_df.loc[vessel_mask(boiler_kpi_df, vessel)]
+
+        slip = numeric_series(vessel_performance_df, "Calculated Slip").mean()
+        me_load = numeric_series(vessel_performance_df, "ME Load [%MCR]").mean()
+        sfoc = numeric_series(vessel_performance_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
+        boiler = numeric_series(vessel_boiler_df, "Boiler Sum").sum(min_count=1)
+
+        rows.append(
+            {
+                "Vessels included": vessel,
+                "Average Calculated Slip": format_percentage(slip),
+                "Average ME Load [%MCR]": format_percentage(me_load),
+                "Average SFOC [gr/Kwh]": format_value(sfoc, 2),
+                "Boiler Sum": format_value(boiler, 2),
+            }
+        )
+
+    kpi_df = pd.DataFrame(rows)
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        kpi_df.to_excel(writer, index=False, sheet_name="KPI Report", startrow=table_start_row)
+        # Leave rows 1-2 for title and period. The KPI table starts on row 3.
+        kpi_df.to_excel(writer, index=False, sheet_name="KPI Report", startrow=3)
         worksheet = writer.sheets["KPI Report"]
 
         worksheet["A1"] = report_title
@@ -1405,17 +1411,18 @@ def to_kpi_excel_bytes(
         worksheet["A2"] = f"Period: {selected_start.strftime('%d/%m/%Y')} to {selected_end.strftime('%d/%m/%Y')}"
         worksheet["A2"].font = worksheet["A2"].font.copy(italic=True)
 
-        if show_vessel_list:
-            worksheet["A3"] = "Vessels included:"
-            worksheet["A3"].font = worksheet["A3"].font.copy(bold=True)
-            worksheet["B3"] = ", ".join(selected_vessels)
-            worksheet["B3"].alignment = worksheet["B3"].alignment.copy(wrap_text=True)
+        # Add a grouped KPI heading above the KPI value columns.
+        worksheet["A3"] = "Vessels included"
+        worksheet["A3"].font = worksheet["A3"].font.copy(bold=True)
+        worksheet["B3"] = "KPIs"
+        worksheet["B3"].font = worksheet["B3"].font.copy(bold=True)
+        worksheet.merge_cells(start_row=3, start_column=2, end_row=3, end_column=5)
 
-        header_row = table_start_row + 1
+        header_row = 4
         for cell in worksheet[header_row]:
             cell.font = cell.font.copy(bold=True)
 
-        filter_start_row = table_start_row + len(kpi_df) + 3
+        filter_start_row = header_row + len(kpi_df) + 3
         worksheet[f"A{filter_start_row}"] = "KPI filters used"
         worksheet[f"A{filter_start_row}"].font = worksheet[f"A{filter_start_row}"].font.copy(bold=True)
 
@@ -1435,11 +1442,13 @@ def to_kpi_excel_bytes(
             worksheet[f"A{row}"] = line
             row += 1
 
-        worksheet.column_dimensions["A"].width = 42
-        worksheet.column_dimensions["B"].width = 48
+        worksheet.column_dimensions["A"].width = 36
+        worksheet.column_dimensions["B"].width = 24
+        worksheet.column_dimensions["C"].width = 24
+        worksheet.column_dimensions["D"].width = 24
+        worksheet.column_dimensions["E"].width = 16
 
     return output.getvalue()
-
 
 def numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     if column not in df.columns:
@@ -2031,10 +2040,8 @@ def main() -> None:
             selected_vessels=selected_vessels,
             selected_start=dashboard_start_date,
             selected_end=dashboard_end_date,
-            slip=slip,
-            me_load=me_load,
-            sfoc=sfoc,
-            boiler=boiler,
+            performance_kpi_df=performance_kpi_df,
+            boiler_kpi_df=boiler_kpi_df,
             performance_filter_specs=performance_filter_specs,
             boiler_filter_specs=boiler_filter_specs,
         )
