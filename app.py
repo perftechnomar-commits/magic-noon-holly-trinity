@@ -1317,6 +1317,130 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def filter_specs_to_text(specs: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+
+    for spec in specs:
+        column = spec.get("column", "-")
+        kind = spec.get("kind")
+
+        if kind == "numeric":
+            parts = []
+            if spec.get("min") is not None:
+                parts.append(f"{spec.get('min_op', '>=')} {spec.get('min')}")
+            if spec.get("max") is not None:
+                parts.append(f"{spec.get('max_op', '<=')} {spec.get('max')}")
+            lines.append(f"{column}: {' and '.join(parts) if parts else 'No limit'}")
+            continue
+
+        if kind == "categorical":
+            values = spec.get("values") or []
+            lines.append(f"{column}: {', '.join(map(str, values)) if values else 'All values'}")
+            continue
+
+        if kind == "datetime":
+            parts = []
+            from_value = spec.get("from")
+            to_value = spec.get("to")
+            if from_value is not None:
+                parts.append(f"from {pd.Timestamp(from_value).strftime('%d/%m/%Y')}")
+            if to_value is not None:
+                parts.append(f"to {pd.Timestamp(to_value).strftime('%d/%m/%Y')}")
+            lines.append(f"{column}: {' '.join(parts) if parts else 'No limit'}")
+            continue
+
+        lines.append(f"{column}: No filter details")
+
+    return lines or ["No filters enabled"]
+
+
+def to_kpi_excel_bytes(
+    selected_group: str,
+    selected_vessels: list[str],
+    selected_start: date,
+    selected_end: date,
+    slip: Any,
+    me_load: Any,
+    sfoc: Any,
+    boiler: Any,
+    performance_filter_specs: list[dict[str, Any]],
+    boiler_filter_specs: list[dict[str, Any]],
+) -> bytes:
+    output = BytesIO()
+
+    if selected_group == "Single vessel" and selected_vessels:
+        report_title = selected_vessels[0]
+    elif selected_group == "All fleets":
+        report_title = "All fleets"
+    else:
+        report_title = selected_group
+
+    show_vessel_list = selected_group not in {"All fleets", "Single vessel"}
+    table_start_row = 6 if show_vessel_list else 4
+
+    kpi_df = pd.DataFrame(
+        {
+            "KPI": [
+                "Average Calculated Slip",
+                "Average ME Load [%MCR]",
+                "Average SFOC [gr/Kwh]",
+                "Boiler Sum",
+            ],
+            "Value": [
+                format_percentage(slip),
+                format_percentage(me_load),
+                format_value(sfoc, 2),
+                format_value(boiler, 2),
+            ],
+        }
+    )
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        kpi_df.to_excel(writer, index=False, sheet_name="KPI Report", startrow=table_start_row)
+        worksheet = writer.sheets["KPI Report"]
+
+        worksheet["A1"] = report_title
+        worksheet["A1"].font = worksheet["A1"].font.copy(bold=True, underline="single", size=14)
+
+        worksheet["A2"] = f"Period: {selected_start.strftime('%d/%m/%Y')} to {selected_end.strftime('%d/%m/%Y')}"
+        worksheet["A2"].font = worksheet["A2"].font.copy(italic=True)
+
+        if show_vessel_list:
+            worksheet["A3"] = "Vessels included:"
+            worksheet["A3"].font = worksheet["A3"].font.copy(bold=True)
+            worksheet["B3"] = ", ".join(selected_vessels)
+            worksheet["B3"].alignment = worksheet["B3"].alignment.copy(wrap_text=True)
+
+        header_row = table_start_row + 1
+        for cell in worksheet[header_row]:
+            cell.font = cell.font.copy(bold=True)
+
+        filter_start_row = table_start_row + len(kpi_df) + 3
+        worksheet[f"A{filter_start_row}"] = "KPI filters used"
+        worksheet[f"A{filter_start_row}"].font = worksheet[f"A{filter_start_row}"].font.copy(bold=True)
+
+        row = filter_start_row + 1
+        worksheet[f"A{row}"] = "Performance KPI filters"
+        worksheet[f"A{row}"].font = worksheet[f"A{row}"].font.copy(bold=True)
+        row += 1
+        for line in filter_specs_to_text(performance_filter_specs):
+            worksheet[f"A{row}"] = line
+            row += 1
+
+        row += 1
+        worksheet[f"A{row}"] = "Boiler KPI filters"
+        worksheet[f"A{row}"].font = worksheet[f"A{row}"].font.copy(bold=True)
+        row += 1
+        for line in filter_specs_to_text(boiler_filter_specs):
+            worksheet[f"A{row}"] = line
+            row += 1
+
+        worksheet.column_dimensions["A"].width = 42
+        worksheet.column_dimensions["B"].width = 48
+
+    return output.getvalue()
+
+
 def numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     if column not in df.columns:
         return pd.Series(dtype="float64")
@@ -1896,7 +2020,31 @@ def main() -> None:
 
     with tab_dashboard:
         st.markdown('<div class="section-title">Fleet KPIs</div>', unsafe_allow_html=True)
+        slip = numeric_series(performance_kpi_df, "Calculated Slip").mean()
+        me_load = numeric_series(performance_kpi_df, "ME Load [%MCR]").mean()
+        sfoc = numeric_series(performance_kpi_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
+        boiler = numeric_series(boiler_kpi_df, "Boiler Sum").sum(min_count=1)
         render_kpis(performance_kpi_df, boiler_kpi_df)
+
+        kpi_excel_bytes = to_kpi_excel_bytes(
+            selected_group=selected_group,
+            selected_vessels=selected_vessels,
+            selected_start=dashboard_start_date,
+            selected_end=dashboard_end_date,
+            slip=slip,
+            me_load=me_load,
+            sfoc=sfoc,
+            boiler=boiler,
+            performance_filter_specs=performance_filter_specs,
+            boiler_filter_specs=boiler_filter_specs,
+        )
+        st.download_button(
+            "Download KPI summary Excel",
+            data=kpi_excel_bytes,
+            file_name="kpi_summary_report.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
         if len(performance_kpi_df) != len(dashboard_df) or len(boiler_kpi_df) != len(dashboard_df):
             st.caption(
                 f"Performance KPI filters use {len(performance_kpi_df):,} of {len(dashboard_df):,} reports. "
