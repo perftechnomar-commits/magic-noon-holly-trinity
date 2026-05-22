@@ -1412,7 +1412,7 @@ def to_kpi_excel_bytes(
         worksheet["A2"].font = worksheet["A2"].font.copy(italic=True)
 
         # Add a grouped KPI heading above the KPI value columns.
-        worksheet["A3"] = "Vessels included"
+        
         worksheet["A3"].font = worksheet["A3"].font.copy(bold=True)
         worksheet["B3"] = "KPIs"
         worksheet["B3"].font = worksheet["B3"].font.copy(bold=True)
