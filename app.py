@@ -1354,6 +1354,13 @@ def filter_specs_to_text(specs: list[dict[str, Any]]) -> list[str]:
     return lines or ["No filters enabled"]
 
 
+def vessel_fleet_name(vessel: str) -> str:
+    for fleet, vessels in VESSEL_GROUPS.items():
+        if vessel in vessels:
+            return fleet
+    return "-"
+
+
 def to_kpi_excel_bytes(
     selected_group: str,
     selected_vessels: list[str],
@@ -1396,6 +1403,7 @@ def to_kpi_excel_bytes(
         rows.append(
             {
                 "Vessels included": vessel,
+                "Fleet": vessel_fleet_name(vessel),
                 "Average Calculated Slip": format_percentage(slip),
                 "Average ME Load [%MCR]": format_percentage(me_load),
                 "Average SFOC [gr/Kwh]": format_value(sfoc, 2),
@@ -1419,9 +1427,9 @@ def to_kpi_excel_bytes(
         # Add a grouped KPI heading above the KPI value columns.
         
         worksheet["A3"].font = worksheet["A3"].font.copy(bold=True)
-        worksheet["B3"] = "KPIs"
-        worksheet["B3"].font = worksheet["B3"].font.copy(bold=True)
-        worksheet.merge_cells(start_row=3, start_column=2, end_row=3, end_column=5)
+        worksheet["C3"] = "KPIs"
+        worksheet["C3"].font = worksheet["C3"].font.copy(bold=True)
+        worksheet.merge_cells(start_row=3, start_column=3, end_row=3, end_column=6)
 
         header_row = 4
         for cell in worksheet[header_row]:
@@ -1458,10 +1466,11 @@ def to_kpi_excel_bytes(
             row += 1
 
         worksheet.column_dimensions["A"].width = 36
-        worksheet.column_dimensions["B"].width = 24
+        worksheet.column_dimensions["B"].width = 16
         worksheet.column_dimensions["C"].width = 24
         worksheet.column_dimensions["D"].width = 24
-        worksheet.column_dimensions["E"].width = 16
+        worksheet.column_dimensions["E"].width = 24
+        worksheet.column_dimensions["F"].width = 16
 
     return output.getvalue()
 
@@ -1845,16 +1854,17 @@ def render_kpi_date_slicer(
 
     previous_value = st.session_state.get(key)
     if isinstance(previous_value, tuple) and len(previous_value) == 2:
-        previous_start, previous_end = previous_value
+        previous_start, _previous_end = previous_value
 
-        # Keep the user's previous KPI period when changing vessel/fleet.
-        # If the new vessel/fleet has a smaller available range, clip only the
-        # invalid edge to the closest available date.
+        # Keep the user's selected start date when changing vessel/fleet, but
+        # always move the end date to the latest available report date in the
+        # current dataset. The real user-controlled filtration is therefore
+        # the beginning of the KPI period.
         selected_start = max(min(previous_start, max_date), min_date)
-        selected_end = max(min(previous_end, max_date), min_date)
+        selected_end = max_date
 
         if selected_start > selected_end:
-            selected_start, selected_end = min_date, max_date
+            selected_start = min_date
 
         st.session_state[key] = (selected_start, selected_end)
     else:
