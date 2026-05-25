@@ -1359,8 +1359,12 @@ def to_kpi_excel_bytes(
     selected_vessels: list[str],
     selected_start: date,
     selected_end: date,
-    performance_kpi_df: pd.DataFrame,
+    slip_kpi_df: pd.DataFrame,
+    me_sfoc_kpi_df: pd.DataFrame,
     boiler_kpi_df: pd.DataFrame,
+    slip_period: tuple[date, date],
+    me_sfoc_period: tuple[date, date],
+    boiler_period: tuple[date, date],
     performance_filter_specs: list[dict[str, Any]],
     boiler_filter_specs: list[dict[str, Any]],
 ) -> bytes:
@@ -1380,12 +1384,13 @@ def to_kpi_excel_bytes(
 
     rows: list[dict[str, str]] = []
     for vessel in selected_vessels:
-        vessel_performance_df = performance_kpi_df.loc[vessel_mask(performance_kpi_df, vessel)]
+        vessel_slip_df = slip_kpi_df.loc[vessel_mask(slip_kpi_df, vessel)]
+        vessel_me_sfoc_df = me_sfoc_kpi_df.loc[vessel_mask(me_sfoc_kpi_df, vessel)]
         vessel_boiler_df = boiler_kpi_df.loc[vessel_mask(boiler_kpi_df, vessel)]
 
-        slip = numeric_series(vessel_performance_df, "Calculated Slip").mean()
-        me_load = numeric_series(vessel_performance_df, "ME Load [%MCR]").mean()
-        sfoc = numeric_series(vessel_performance_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
+        slip = numeric_series(vessel_slip_df, "Calculated Slip").mean()
+        me_load = numeric_series(vessel_me_sfoc_df, "ME Load [%MCR]").mean()
+        sfoc = numeric_series(vessel_me_sfoc_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
         boiler = numeric_series(vessel_boiler_df, "Boiler Sum").sum(min_count=1)
 
         rows.append(
@@ -1427,6 +1432,16 @@ def to_kpi_excel_bytes(
         worksheet[f"A{filter_start_row}"].font = worksheet[f"A{filter_start_row}"].font.copy(bold=True)
 
         row = filter_start_row + 1
+        worksheet[f"A{row}"] = "KPI date periods"
+        worksheet[f"A{row}"].font = worksheet[f"A{row}"].font.copy(bold=True)
+        row += 1
+        worksheet[f"A{row}"] = f"Average Calculated Slip: {slip_period[0].strftime('%d/%m/%Y')} to {slip_period[1].strftime('%d/%m/%Y')}"
+        row += 1
+        worksheet[f"A{row}"] = f"Average ME Load / SFOC: {me_sfoc_period[0].strftime('%d/%m/%Y')} to {me_sfoc_period[1].strftime('%d/%m/%Y')}"
+        row += 1
+        worksheet[f"A{row}"] = f"Boiler Sum: {boiler_period[0].strftime('%d/%m/%Y')} to {boiler_period[1].strftime('%d/%m/%Y')}"
+        row += 2
+
         worksheet[f"A{row}"] = "Performance KPI filters"
         worksheet[f"A{row}"].font = worksheet[f"A{row}"].font.copy(bold=True)
         row += 1
@@ -1456,16 +1471,10 @@ def numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(df[column], errors="coerce")
 
 
-def render_kpis(performance_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
-    latest_value = (
-        performance_df["EndDateTimeGMT"].max()
-        if "EndDateTimeGMT" in performance_df.columns and not performance_df.empty
-        else pd.NA
-    )
-
-    slip = numeric_series(performance_df, "Calculated Slip").mean()
-    me_load = numeric_series(performance_df, "ME Load [%MCR]").mean()
-    sfoc = numeric_series(performance_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
+def render_kpis(slip_df: pd.DataFrame, me_sfoc_df: pd.DataFrame, boiler_df: pd.DataFrame) -> None:
+    slip = numeric_series(slip_df, "Calculated Slip").mean()
+    me_load = numeric_series(me_sfoc_df, "ME Load [%MCR]").mean()
+    sfoc = numeric_series(me_sfoc_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
     boiler = numeric_series(boiler_df, "Boiler Sum").sum(min_count=1)
 
     cols = st.columns(4)
@@ -1804,6 +1813,59 @@ def render_dashboard_date_slicer(df: pd.DataFrame) -> tuple[pd.DataFrame, date, 
     return filtered_df, selected_start, selected_end
 
 
+def filter_dataframe_by_date_range(df: pd.DataFrame, selected_start: date, selected_end: date) -> pd.DataFrame:
+    if df.empty or "StartDateTimeGMT" not in df.columns:
+        return df
+
+    start_timestamp = pd.Timestamp(selected_start, tz="UTC")
+    end_timestamp = pd.Timestamp(selected_end + timedelta(days=1), tz="UTC")
+    date_values = pd.to_datetime(df["StartDateTimeGMT"], errors="coerce", utc=True)
+    return df[date_values.ge(start_timestamp) & date_values.lt(end_timestamp)].copy()
+
+
+def render_kpi_date_slicer(
+    df: pd.DataFrame,
+    *,
+    label: str,
+    key: str,
+) -> tuple[pd.DataFrame, date, date]:
+    if df.empty or "StartDateTimeGMT" not in df.columns:
+        today = date.today()
+        st.caption(f"{label}: no available reports.")
+        return df, today, today
+
+    dates = pd.to_datetime(df["StartDateTimeGMT"], errors="coerce", utc=True).dt.date.dropna()
+    if dates.empty:
+        today = date.today()
+        st.caption(f"{label}: no valid report dates.")
+        return df, today, today
+
+    min_date = max(dates.min(), API_FULL_START_DATE)
+    max_date = min(dates.max(), date.today())
+
+    st.caption(label)
+    if min_date >= max_date:
+        selected_start, selected_end = min_date, max_date
+        st.caption(f"Available period: {selected_start.strftime('%d/%m/%Y')}")
+    else:
+        selected_start, selected_end = st.slider(
+            label,
+            min_value=min_date,
+            max_value=max_date,
+            value=(min_date, max_date),
+            format="DD/MM/YYYY",
+            key=key,
+            label_visibility="collapsed",
+        )
+
+    filtered_df = filter_dataframe_by_date_range(df, selected_start, selected_end)
+    st.caption(
+        f"Selected period: {selected_start.strftime('%d/%m/%Y')} to {selected_end.strftime('%d/%m/%Y')} "
+        f"({len(filtered_df):,} of {len(df):,} filtered reports)"
+    )
+    return filtered_df, selected_start, selected_end
+
+
 # =============================================================================
 # Session-state data loading helpers
 # =============================================================================
@@ -2024,24 +2086,42 @@ def main() -> None:
             default_categorical_filters=DEFAULT_BOILER_CATEGORICAL_FILTERS,
         )
 
-    performance_kpi_df = apply_excel_like_filters(dashboard_df, performance_filter_specs)
-    boiler_kpi_df = apply_excel_like_filters(dashboard_df, boiler_filter_specs)
+    performance_kpi_base_df = apply_excel_like_filters(dashboard_df, performance_filter_specs)
+    boiler_kpi_base_df = apply_excel_like_filters(dashboard_df, boiler_filter_specs)
 
     with tab_dashboard:
         st.markdown('<div class="section-title">Fleet KPIs</div>', unsafe_allow_html=True)
-        slip = numeric_series(performance_kpi_df, "Calculated Slip").mean()
-        me_load = numeric_series(performance_kpi_df, "ME Load [%MCR]").mean()
-        sfoc = numeric_series(performance_kpi_df, "SFOC [gr/Kwh]").replace(0, pd.NA).mean()
-        boiler = numeric_series(boiler_kpi_df, "Boiler Sum").sum(min_count=1)
-        render_kpis(performance_kpi_df, boiler_kpi_df)
+        st.caption("Use the three KPI period filters below to control each KPI calculation independently.")
+
+        slip_kpi_df, slip_start_date, slip_end_date = render_kpi_date_slicer(
+            performance_kpi_base_df,
+            label="Average Calculated Slip period",
+            key="calculated_slip_kpi_period_slicer",
+        )
+        me_sfoc_kpi_df, me_sfoc_start_date, me_sfoc_end_date = render_kpi_date_slicer(
+            performance_kpi_base_df,
+            label="Average ME Load / SFOC period",
+            key="me_load_sfoc_kpi_period_slicer",
+        )
+        boiler_kpi_df, boiler_start_date, boiler_end_date = render_kpi_date_slicer(
+            boiler_kpi_base_df,
+            label="Boiler Sum period",
+            key="boiler_sum_kpi_period_slicer",
+        )
+
+        render_kpis(slip_kpi_df, me_sfoc_kpi_df, boiler_kpi_df)
 
         kpi_excel_bytes = to_kpi_excel_bytes(
             selected_group=selected_group,
             selected_vessels=selected_vessels,
             selected_start=dashboard_start_date,
             selected_end=dashboard_end_date,
-            performance_kpi_df=performance_kpi_df,
+            slip_kpi_df=slip_kpi_df,
+            me_sfoc_kpi_df=me_sfoc_kpi_df,
             boiler_kpi_df=boiler_kpi_df,
+            slip_period=(slip_start_date, slip_end_date),
+            me_sfoc_period=(me_sfoc_start_date, me_sfoc_end_date),
+            boiler_period=(boiler_start_date, boiler_end_date),
             performance_filter_specs=performance_filter_specs,
             boiler_filter_specs=boiler_filter_specs,
         )
@@ -2052,10 +2132,15 @@ def main() -> None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
-        if len(performance_kpi_df) != len(dashboard_df) or len(boiler_kpi_df) != len(dashboard_df):
+        if (
+            len(slip_kpi_df) != len(dashboard_df)
+            or len(me_sfoc_kpi_df) != len(dashboard_df)
+            or len(boiler_kpi_df) != len(dashboard_df)
+        ):
             st.caption(
-                f"Performance KPI filters use {len(performance_kpi_df):,} of {len(dashboard_df):,} reports. "
-                f"Boiler KPI filters use {len(boiler_kpi_df):,} of {len(dashboard_df):,} reports."
+                f"Calculated Slip uses {len(slip_kpi_df):,} reports. "
+                f"ME Load / SFOC uses {len(me_sfoc_kpi_df):,} reports. "
+                f"Boiler Sum uses {len(boiler_kpi_df):,} reports."
             )
 
         st.markdown('<div class="section-title">Latest Report By Vessel</div>', unsafe_allow_html=True)
