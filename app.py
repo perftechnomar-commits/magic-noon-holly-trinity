@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode, urljoin
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -712,6 +713,26 @@ def apply_custom_css() -> None:
         div[data-testid="stSlider"] {
             accent-color: #FFD84A !important;
         }
+
+        .api-load-caption {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin: -0.35rem 0 1.05rem 0;
+            padding: 0.38rem 0.72rem;
+            border: 1px solid rgba(255, 216, 74, 0.22);
+            border-radius: 999px;
+            background: rgba(13, 13, 9, 0.46);
+            color: #B8B29F;
+            font-size: 0.80rem;
+            font-weight: 650;
+            backdrop-filter: blur(6px);
+        }
+
+        .api-load-caption span {
+            color: #FFF7CC;
+            font-weight: 800;
+        }
         </style>
         """
         .replace("__BACKGROUND_IMAGE_LAYER__", background_image_layer)
@@ -815,6 +836,29 @@ def render_header(selected_group: str, selected_vessels: list[str]) -> None:
     )
 
 
+
+
+def render_api_load_caption(metadata: dict[str, Any] | None) -> None:
+    """Render one small, discrete last-load indicator below the dashboard hero."""
+    metadata = metadata or {}
+    last_load = metadata.get("loaded_at_local") or metadata.get("loaded_at_utc") or "-"
+    kept_rows = int(metadata.get("kept_rows", metadata.get("rows", 0)) or 0)
+    transformed_rows = int(metadata.get("transformed_rows", 0) or 0)
+
+    extra = ""
+    if transformed_rows:
+        extra = f" · dashboard rows: <span>{transformed_rows:,}</span>"
+
+    st.markdown(
+        f"""
+        <div class="api-load-caption">
+            Last API load: <span>{escape(str(last_load))}</span>
+            · compact API rows: <span>{kept_rows:,}</span>{extra}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # =============================================================================
 # Secrets/auth/API helpers
 # =============================================================================
@@ -830,6 +874,45 @@ def read_secret(name: str, default: str = "") -> str:
     except Exception:
         value = os.getenv(name, default)
     return str(value).strip() if value is not None else default
+
+
+
+
+def app_timezone() -> ZoneInfo:
+    timezone_name = read_secret("APP_TIMEZONE", "Europe/Athens")
+    try:
+        return ZoneInfo(timezone_name)
+    except Exception:
+        return ZoneInfo("Europe/Athens")
+
+
+def local_time_label(dt_utc: datetime | None = None) -> str:
+    dt_utc = dt_utc or datetime.now(timezone.utc)
+    if dt_utc.tzinfo is None:
+        dt_utc = dt_utc.replace(tzinfo=timezone.utc)
+    local_dt = dt_utc.astimezone(app_timezone())
+    return local_dt.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def get_query_param(name: str, default: str = "") -> str:
+    try:
+        value = st.query_params.get(name, default)
+    except Exception:
+        value = st.experimental_get_query_params().get(name, [default])
+
+    if isinstance(value, list):
+        return str(value[0]) if value else default
+    return str(value) if value is not None else default
+
+
+def is_warmup_request() -> bool:
+    return get_query_param("warmup", "0") == "1"
+
+
+def warmup_token_is_valid() -> bool:
+    expected_token = read_secret("WARMUP_TOKEN")
+    provided_token = get_query_param("token", "")
+    return bool(expected_token) and hmac.compare_digest(provided_token, expected_token)
 
 
 def require_dashboard_password() -> None:
@@ -1002,7 +1085,10 @@ def fetch_report_data(
                 break
             next_url = urljoin(next_url, next_link)
 
+    loaded_at_utc = datetime.now(timezone.utc)
     metadata = {
+        "loaded_at_utc": loaded_at_utc.strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "loaded_at_local": local_time_label(loaded_at_utc),
         "rows": len(kept_rows),
         "kept_rows": len(kept_rows),
         "scanned_rows": scanned_rows,
@@ -1030,6 +1116,11 @@ def cached_fetch_report_data(
         auth_method=auth_method,
         start_date=start_date,
     )
+
+
+@st.cache_data(ttl=API_CACHE_TTL_SECONDS, show_spinner=False)
+def cached_transform_report_data(raw_df: pd.DataFrame) -> pd.DataFrame:
+    return transform_report_data(raw_df)
 
 # =============================================================================
 # Transform helpers
@@ -1959,7 +2050,8 @@ def set_loaded_raw_state(
     signature: dict[str, Any],
 ) -> None:
     metadata = metadata.copy()
-    metadata["loaded_at_utc"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    metadata.setdefault("loaded_at_utc", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+    metadata.setdefault("loaded_at_local", local_time_label())
     metadata["loaded_start_date"] = signature["start_date"]
     st.session_state["loaded_raw_df"] = raw_df
     st.session_state["loaded_metadata"] = metadata
@@ -2003,7 +2095,67 @@ def raw_data_covers_request(
 # =============================================================================
 
 
+
+def run_warmup_if_requested() -> None:
+    """Warm up API/cache via a secret-token URL without showing the normal dashboard UI."""
+    if not is_warmup_request():
+        return
+
+    apply_custom_css()
+
+    if not warmup_token_is_valid():
+        st.error("Invalid or missing warmup token.")
+        st.stop()
+
+    username = read_secret("MARORKA_USERNAME")
+    password = read_secret("MARORKA_PASSWORD")
+    token = read_secret("MARORKA_TOKEN")
+    auth_method = read_secret("MARORKA_AUTH_METHOD", "basic")
+    start_date = API_FULL_START_DATE
+
+    if auth_method.lower() in {"basic", "digest"} and (not username or not password):
+        st.error("Warmup failed: MARORKA_USERNAME and MARORKA_PASSWORD are required.")
+        st.stop()
+
+    if get_query_param("force", "0") == "1":
+        cached_fetch_report_data.clear()
+        cached_transform_report_data.clear()
+
+    try:
+        with st.spinner("Warming up compact Marorka report data..."):
+            raw_df, metadata = cached_fetch_report_data(
+                username=username,
+                password=password,
+                token=token,
+                auth_method=auth_method,
+                start_date=start_date,
+            )
+            all_df = cached_transform_report_data(raw_df)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        st.error(f"Warmup failed: Marorka API request failed with status {status}.")
+        st.stop()
+    except (MarorkaConfigError, ValueError, requests.RequestException) as exc:
+        st.error(f"Warmup failed: {exc}")
+        st.stop()
+
+    metadata = metadata.copy()
+    metadata["transformed_rows"] = int(len(all_df))
+
+    st.success("Warmup OK.")
+    st.write(
+        {
+            "last_api_load_local": metadata.get("loaded_at_local"),
+            "compact_api_rows": int(len(raw_df)),
+            "dashboard_rows": int(len(all_df)),
+            "force_refresh": get_query_param("force", "0") == "1",
+        }
+    )
+    st.stop()
+
+
 def main() -> None:
+    run_warmup_if_requested()
     require_dashboard_password()
     apply_custom_css()
 
@@ -2033,6 +2185,7 @@ def main() -> None:
     if needs_raw_load:
         if refresh:
             cached_fetch_report_data.clear()
+            cached_transform_report_data.clear()
 
         try:
             spinner_text = (
@@ -2074,11 +2227,12 @@ def main() -> None:
     if all_df is None or current_transform_sig != transform_sig:
         try:
             transform_started_at = time.perf_counter()
-            all_df = transform_report_data(raw_df)
+            all_df = cached_transform_report_data(raw_df)
             set_loaded_transform_state(all_df, transform_sig)
             metadata = st.session_state.get("loaded_metadata")
             if isinstance(metadata, dict):
                 metadata["transform_seconds"] = round(time.perf_counter() - transform_started_at, 2)
+                metadata["transformed_rows"] = int(len(all_df))
                 st.session_state["loaded_metadata"] = metadata
         except (ValueError, TypeError) as exc:
             st.error(str(exc))
@@ -2090,6 +2244,8 @@ def main() -> None:
     if df.empty:
         st.warning("No matching performance report values were returned for the selected fleet/date window.")
         st.stop()
+
+    render_api_load_caption(metadata)
 
     tab_dashboard, tab_diagnostics, tab_data = st.tabs(["Dashboard", "API Diagnostics", "Dataset"])
 
@@ -2209,6 +2365,7 @@ def main() -> None:
                     "Dashboard selected start",
                     "Dashboard selected end",
                     "API loaded at",
+                    "API loaded local time",
                     "API loaded from start date",
                     "Selected-vessel reports",
                     "All-vessel transformed reports",
@@ -2228,6 +2385,7 @@ def main() -> None:
                     dashboard_start_date.isoformat(),
                     dashboard_end_date.isoformat(),
                     metadata.get("loaded_at_utc", "-"),
+                    metadata.get("loaded_at_local", "-"),
                     metadata.get("loaded_start_date", "-"),
                     f"{len(df):,}",
                     f"{len(all_df):,}",
