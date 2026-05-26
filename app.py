@@ -807,7 +807,7 @@ def render_header(selected_group: str, selected_vessels: list[str]) -> None:
             <div class="eyebrow">Marorka performance monitoring</div>
             <h1 class="dashboard-title">Magic Noon - Holy Trinity</h1>
             <div class="dashboard-subtitle">
-                {escape(selected_group)} | {escape(vessel_text)} | live API snapshot
+                {escape(selected_group)} | {escape(vessel_text)} | API snapshot
             </div>
         </div>
         """,
