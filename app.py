@@ -2121,7 +2121,7 @@ def run_warmup_if_requested() -> None:
         cached_transform_report_data.clear()
 
     try:
-        with st.spinner("Warming up compact Marorka report data..."):
+        with st.spinner("Warming up API..."):
             raw_df, metadata = cached_fetch_report_data(
                 username=username,
                 password=password,
