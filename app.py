@@ -1997,7 +1997,7 @@ def render_kpi_date_slicer(
 
 
 # =============================================================================
-# Session-state data loading helpers
+# Session-state data  helpers
 # =============================================================================
 
 
@@ -2188,9 +2188,9 @@ def main() -> None:
 
         try:
             spinner_text = (
-                "Refreshing compact Marorka report data..."
+                "Refreshing API..."
                 if refresh
-                else "Loading compact Marorka report data..."
+                else "Loading API..."
             )
             with st.spinner(spinner_text):
                 raw_df, metadata = cached_fetch_report_data(
